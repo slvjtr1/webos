@@ -1,5 +1,9 @@
 #!/bin/bash
-# A release in one step:  tools/release.sh VERSION [site-dir]
+# A release in one step:  tools/release.sh VERSION [site-dir] [--beta]
+# --beta: a pre-release. Only api/apps/<id>/beta/manifest.json is written (marked "channel": "beta"); the stable files
+#   (manifest.json, releases/latest.json, apps.json, api/apps.json, icon, description) are left exactly as they are,
+#   so builds that know no beta channel never see it. Publish it on GitHub as a pre-release (gh release create --prerelease).
+# RELEASE_IPK=<file>: use that package as it is (no version change, no build), for checks of the site files.
 # Sets the version (pkg/appinfo.json; the What's new card keeps its own: a new card, a new card version), builds the IPK
 # (tools/package.sh) and writes the Homebrew Channel files into the site folder, the GitHub Pages
 # repository users add to the Homebrew Channel:
@@ -9,14 +13,17 @@
 # site folder, then commit and push it yourself. The version must go up every time.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="${1:?usage: tools/release.sh VERSION [site-dir]}"
-SITE="${2:-$ROOT/site}"
+BETA=0; ARGS=(); for a in "$@"; do if [ "$a" = --beta ]; then BETA=1; else ARGS+=("$a"); fi; done
+VER="${ARGS[0]:?usage: tools/release.sh VERSION [site-dir] [--beta]}"
+SITE="${ARGS[1]:-$ROOT/site}"
 ID=tv.stremioorigin.app
 BASE="https://origin-webos.vercel.app"
 SRC="https://github.com/slvjtr1/webos"
 [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.0.1"; exit 1; }
 mkdir -p "$SITE"
 
+if [ -n "${RELEASE_IPK:-}" ]; then IPK="$RELEASE_IPK"; [ "$(basename "$IPK")" = "${ID}_${VER}_arm.ipk" ] || { echo "RELEASE_IPK must be named ${ID}_${VER}_arm.ipk"; exit 1; }
+else
 python3 - "$ROOT" "$VER" <<'EOF'
 import re, sys
 root, ver = sys.argv[1], sys.argv[2]
@@ -30,14 +37,15 @@ EOF
 rm -f "$ROOT/dist/${ID}_${VER}_arm.ipk"
 "$ROOT/tools/package.sh" >/dev/null
 IPK="$ROOT/dist/${ID}_${VER}_arm.ipk"
-[ -f "$IPK" ] || { echo "no $IPK"; exit 1; }
-SHA=$(shasum -a 256 "$IPK" | cut -d' ' -f1)
 mkdir -p "$ROOT/dist/dbg/$VER" && cp "$ROOT/build/webos/stremioorigin.dbg" "$ROOT/dist/dbg/$VER/" # kept per version: a shared crash report names its code from it (getlogs)
+fi
+[ -f "$IPK" ] || { echo "no $IPK"; exit 1; }
+SHA=$( (command -v sha256sum >/dev/null && sha256sum "$IPK" || shasum -a 256 "$IPK") | cut -d' ' -f1)
 
-cp "$ROOT/pkg/largeIcon.png" "$SITE/icon.png"
-python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" "$ROOT/tools/homebrew" <<'EOF'
+[ "$BETA" = 1 ] || cp "$ROOT/pkg/largeIcon.png" "$SITE/icon.png"
+python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" "$ROOT/tools/homebrew" "$BETA" <<'EOF'
 import json, os, sys
-site, pid, ver, sha, base, src, hb = sys.argv[1:]
+site, pid, ver, sha, base, src, hb, beta = sys.argv[1:]
 # the Homebrew Channel listing text, approved as written: tools/homebrew/ (the one place it lives, so it cannot drift)
 short = open(os.path.join(hb, 'shortDescription.txt'), encoding='utf-8').read().strip()
 full = open(os.path.join(hb, 'full_description.html'), encoding='utf-8').read()
@@ -47,6 +55,17 @@ manifest = {
   'iconUri': base + '/icon.png', 'sourceUrl': src, 'rootRequired': False,
   'ipkUrl': '%s/releases/download/v%s/%s_%s_arm.ipk' % (src, ver, pid, ver), 'ipkHash': {'sha256': sha}}
 d = os.path.join(site, 'api', 'apps', pid)
+if beta == '1':
+    # the beta's own file, nothing else: the stable channel stays as the last stable release left it
+    stable = os.path.join(d, 'manifest.json')
+    if os.path.exists(stable):
+        sv = json.load(open(stable, encoding='utf-8')).get('version', '0.0.0')
+        if tuple(map(int, sv.split('.'))) >= tuple(map(int, ver.split('.'))): sys.exit('beta %s is not newer than the stable %s' % (ver, sv))
+    manifest['channel'] = 'beta'
+    os.makedirs(os.path.join(d, 'beta'), exist_ok=True)
+    open(os.path.join(d, 'beta', 'manifest.json'), 'w').write(json.dumps(manifest, indent=2) + '\n')
+    print('beta manifest written:', pid, ver, sha, '(stable files untouched)')
+    sys.exit(0)
 os.makedirs(os.path.join(d, 'releases'), exist_ok=True)
 for f in (os.path.join(d, 'manifest.json'), os.path.join(d, 'releases', 'latest.json')):
     open(f, 'w').write(json.dumps(manifest, indent=2) + '\n')
@@ -60,4 +79,5 @@ open(os.path.join(site, 'apps.json'), 'w').write(json.dumps(listing, indent=2) +
 open(os.path.join(d, 'full_description.html'), 'w', encoding='utf-8').write(full)
 print('site updated:', pid, ver, sha)
 EOF
-echo "upload $IPK to the GitHub release v$VER, then commit site/ and push (Vercel deploys it)"
+if [ "$BETA" = 1 ]; then echo "upload $IPK to the GitHub PRE-release v$VER (gh release create v$VER --prerelease), then commit site/ and push"
+else echo "upload $IPK to the GitHub release v$VER, then commit site/ and push (Vercel deploys it)"; fi

@@ -264,7 +264,10 @@ int src_title_verdict(const char *text, const SrcWant *w) {
 /* a recording made in a cinema */
 int src_is_cam(const char *text) {
   if (!text) return 0; static const char *const C[] = { "cam", "camrip", "hdcam", "hdts", "telesync", "hdtc", "telecine", "hdtelesync", "tsrip" };
+  static const char *const SURE[] = { "camrip", "hdcam", "hdts", "telesync", "hdtc", "telecine", "hdtelesync", "tsrip" }; /* never a title's first word */
   for (const char *p = text; *p;) { const char *e = p; while (*e && *e != '\n') e++; Raw r; raw_tokens(p, e, &r);
+    /* a line's first word: only the unmistakable marks, or "cam" / "ts" with "rip" after ("Cam 2018" is a film's name) */
+    if (r.n && (word_in(r.t[0], SURE, sizeof SURE / sizeof *SURE) || ((!strcmp(r.t[0], "cam") || !strcmp(r.t[0], "ts")) && r.n > 1 && !strcmp(r.t[1], "rip")))) return 1;
     for (int i = 1; i < r.n; i++) { if (word_in(r.t[i], C, sizeof C / sizeof *C)) return 1; if (!strcmp(r.t[i], "ts") && i + 1 < r.n && (is_year(r.t[i - 1]) || stop_token(r.t[i + 1]))) return 1; } /* ("ts" as a word of the release, not the file's ending) */
     p = *e ? e + 1 : e; }
   return 0;

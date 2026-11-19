@@ -67,6 +67,14 @@ int main(void) {
   { SrcWant w = { { "1917" }, 1, 2019, 0, 0, { "" }, { 0 }, 0 }; EQ(src_title_verdict("1917.2019.1080p.BluRay.mkv", &w), 1); }
   { SrcWant w = { { "Mission: Impossible - Dead Reckoning Part One" }, 1, 2023, 0, 0, { "Mission: Impossible" }, { 1996 }, 1 }; EQ(src_title_verdict("Mission.Impossible.Dead.Reckoning.Part.1.2023.mkv", &w), 1); EQ(src_title_verdict("Mission.Impossible.Dead.Reckoning.2023.1080p.mkv", &w), 0); EQ(src_title_verdict("Mission.Impossible.1996.1080p.mkv", &w), -2); }
   EQ(src_is_cam("Film.2024.HDCAM.x264"), 1); EQ(src_is_cam("Film 2024 TS x264"), 1); EQ(src_is_cam("Film.2024.1080p.WEB-DL.mkv"), 0); EQ(src_is_cam("video.ts"), 0); EQ(src_is_cam("Cam 2018 1080p"), 0); EQ(src_is_cam("Film 2024 1080p TELESYNC"), 1);
+  /* cinema marks at the start of a line, in the middle, and on a later line of an addon's description */
+  EQ(src_is_cam("HDCAM Film 2024"), 1); EQ(src_is_cam("HDTS.Film.2024.x264"), 1); EQ(src_is_cam("TELESYNC Film 2024 720p"), 1); EQ(src_is_cam("CAMRip Film 2024"), 1);
+  EQ(src_is_cam("CAM Rip Film 2024"), 1); EQ(src_is_cam("TS-Rip Film 2024"), 1); EQ(src_is_cam("hdtc film 2024"), 1);
+  EQ(src_is_cam("Film 2024 HDCAM"), 1); EQ(src_is_cam("Film 2024 TELESYNC 720p"), 1); EQ(src_is_cam("Film [HDTS] 2024"), 1);
+  EQ(src_is_cam("Film 2024 1080p\nHDCAM | 1.4 GB"), 1); EQ(src_is_cam("Torrentio 1080p\nFilm.2024.1080p.WEB-DL.mkv\nCAM rip, 2.1 GB"), 1); EQ(src_is_cam("Film 2024 WEB-DL\n\xf0\x9f\x92\xbe 2.1 GB\nHDTS"), 1);
+  /* titles and files that only look like it */
+  EQ(src_is_cam("Cam 2018 1080p"), 0); EQ(src_is_cam("Cam.2018.1080p.NF.WEB-DL.mkv"), 0); EQ(src_is_cam("video.ts"), 0); EQ(src_is_cam("Cam 2018 1080p\nvideo.ts"), 0);
+  EQ(src_is_cam("Cam Girl 2018 720p"), 0); EQ(src_is_cam("TS 2024 1080p WEB-DL"), 0); EQ(src_is_cam("Film 2024 1080p\nCamera Obscura 2017"), 0); EQ(src_is_cam("Webcam Show 2024 1080p"), 0);
   { char f[200]; EQ(strcmp(src_url_file("https://x.example/dl/abc/The.Show.S01E02.1080p.mkv?token=1", f, sizeof f), "The.Show.S01E02.1080p.mkv"), 0); EQ(src_url_file("https://x.example/play/abcdef", f, sizeof f)[0], 0); EQ(strcmp(src_url_file("https://x.example/a/My%20Film%202020.mp4", f, sizeof f), "My Film 2020.mp4"), 0); }
   printf(fails ? "%d failed\n" : "all passed\n", fails); return fails != 0;
 }

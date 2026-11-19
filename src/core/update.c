@@ -4,6 +4,7 @@
    the Channel waits for the new version's appinfo.json and opens the app again, since nothing else in this
    process survives the install. */
 #include "core/update.h"
+#include "core/updpick.h"
 #include <math.h>
 #include "ui/glass.h"
 #include "core/app.h"
@@ -29,7 +30,8 @@
 
 #define UPD_GH "https://api.github.com/repos/slvjtr1/webos/releases?per_page=8"
 #define UPD_MAN "https://origin-webos.vercel.app/api/apps/" SB_APP_ID "/manifest.json"
-typedef struct { char ver[24], url[512], sha[72]; char notes[5][256]; int nnotes, beta; } Rel; /* beta: a GitHub pre-release (Settings > About > Beta updates) */
+#define UPD_MAN_BETA "https://origin-webos.vercel.app/api/apps/" SB_APP_ID "/beta/manifest.json" /* (its own file: builds that know no channel only ever read the stable one) */
+typedef UpdRel Rel; /* (src/core/updpick.c: the one check for both sources) */
 static struct {
   char cur[24], appinfo[1200]; int read; Rel avail; int has, state; char msg[240]; unsigned serial;
   int pill, pf; double hideAt, openAt; Tween pa, slide, dot; unsigned long job; int started;
@@ -39,7 +41,7 @@ static struct {
 static void changed(void) { U.serial++; }
 int update_beta(void) { return !strcmp(store_get("betaUpdates", "false"), "true"); }
 int update_avail_beta(void) { return U.has && U.avail.beta; }
-static int ver_cmp(const char *a, const char *b);
+#define ver_cmp upd_ver_cmp
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); return t.tv_sec * 1000.0 + t.tv_nsec / 1e6; }
 
 /* "1.0.0" from appinfo.json beside the binary (the package), or pkg/ for the Mac preview */
@@ -66,42 +68,6 @@ int update_state(void) { return U.state; }
 const char *update_msg(void) { return U.msg; }
 unsigned update_serial(void) { return U.serial; }
 
-static int ver_cmp(const char *a, const char *b) {
-  for (int i = 0; i < 3; i++) { long x = a ? strtol(a, NULL, 10) : 0, y = b ? strtol(b, NULL, 10) : 0;
-    if (x != y) return x > y ? 1 : -1;
-    a = a ? strchr(a, '.') : NULL; if (a) a++; b = b ? strchr(b, '.') : NULL; if (b) b++; }
-  return 0;
-}
-static int ws(const char *s) { return *s == ' ' || *s == '\t' || *s == '\v' || *s == '\f' || *s == '\r' ? 1 : !strncmp(s, "\xc2\xa0", 2) ? 2 : 0; }
-/* the release's bullet points as plain text, the first five: /^\s*[-*•]\s+(.+)$/, then no **, __, ` and [text](link) -> text */
-static int notes_from(const char *md, char out[5][256]) {
-  int n = 0; if (!md) return 0;
-  for (const char *l = md; *l && n < 5;) {
-    const char *e = strchr(l, '\n'); size_t len = e ? (size_t)(e - l) : strlen(l); if (len && l[len - 1] == '\r') len--;
-    char line[1024]; if (len >= sizeof line) len = sizeof line - 1; memcpy(line, l, len); line[len] = 0;
-    l = e ? e + 1 : l + strlen(l);
-    char *p = line; int k; while ((k = ws(p))) p += k;
-    if (*p == '-' || *p == '*') p++; else if (!strncmp(p, "\xe2\x80\xa2", 3)) p += 3; else continue;
-    int nsp = 0; while ((k = ws(p))) { p += k; nsp++; } if (!nsp) continue;
-    if (!*p && nsp < 2) continue; /* (.+) needs a character: one of the spaces when nothing else follows */
-    char t[1024]; size_t o = 0;
-    for (const char *q = p; *q && o + 1 < sizeof t;) {
-      if (!strncmp(q, "**", 2) || !strncmp(q, "__", 2)) { q += 2; continue; }
-      if (*q == '`') { q++; continue; }
-      t[o++] = *q++; }
-    t[o] = 0;
-    char u[1024]; o = 0;
-    for (const char *q = t; *q && o + 1 < sizeof u;) {
-      if (*q == '[') { const char *c = q + 1; while (*c && *c != ']') c++;
-        if (*c == ']' && c > q + 1 && c[1] == '(') { const char *d = c + 2; while (*d && *d != ')') d++;
-          if (*d == ')') { size_t m = (size_t)(c - q - 1); if (o + m >= sizeof u) m = sizeof u - 1 - o; memcpy(u + o, q + 1, m); o += m; q = d + 1; continue; } } }
-      u[o++] = *q++; }
-    u[o] = 0;
-    char *s = u; while ((k = ws(s))) s += k; size_t sl = strlen(s); while (sl && (s[sl - 1] == ' ' || s[sl - 1] == '\t' || s[sl - 1] == '\r')) s[--sl] = 0;
-    snprintf(out[n++], 256, "%s", s);
-  }
-  return n;
-}
 static void pill_show(void);
 static double nextAt; static int forceCheck, pillPend; /* the next check while the app stays open; a check that skips the 6-hour rest; a notice that waits for the film to end */
 static int reached; /* the release list or the listing answered: finding nothing for this package then means nothing newer */
@@ -121,45 +87,31 @@ static void done(const Rel *best, int manual) {
   }
   changed();
 }
-static void on_manifest(int st, const unsigned char *body, size_t len, void *ud) {
-  (void)len; int manual = (int)(size_t)ud; Rel r; memset(&r, 0, sizeof r); int ok = 0; lastSt = st;
-  cJSON *m = st == 200 ? cJSON_Parse((const char *)body) : NULL; if (cJSON_IsObject(m)) reached = 1;
-  cJSON *v = cJSON_GetObjectItemCaseSensitive(m, "version"), *u = cJSON_GetObjectItemCaseSensitive(m, "ipkUrl"), *h = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(m, "ipkHash"), "sha256");
-  if (cJSON_IsString(v) && cJSON_IsString(u) && cJSON_IsString(h) && *v->valuestring && *u->valuestring && *h->valuestring) {
-    size_t ul = strlen(u->valuestring);
-    if (ul > 8 && !strcmp(u->valuestring + ul - 8, "_arm.ipk")) { /* the listing may name another build under the same id: only this package's kind */
-      ok = 1; snprintf(r.ver, sizeof r.ver, "%s", v->valuestring); snprintf(r.url, sizeof r.url, "%s", u->valuestring); snprintf(r.sha, sizeof r.sha, "%s", h->valuestring);
-      cJSON *ns = cJSON_GetObjectItemCaseSensitive(m, "notes"), *x;
-      if (cJSON_IsArray(ns)) { cJSON_ArrayForEach(x, ns) if (r.nnotes < 5 && cJSON_IsString(x)) snprintf(r.notes[r.nnotes++], 256, "%s", x->valuestring); }
-      else { cJSON *rn = cJSON_GetObjectItemCaseSensitive(m, "releaseNotes"); r.nnotes = notes_from(cJSON_IsString(rn) ? rn->valuestring : NULL, r.notes); } }
-  }
-  cJSON_Delete(m);
-  done(ok ? &r : NULL, manual);
+/* the fallback when GitHub gave nothing for this app: with Beta updates the beta manifest first (stage 0), then always
+   the stable one (stage 1); the newer of the two usable ones is offered */
+static Rel fbBeta; static int fbBetaHas;
+static void on_manifest(int st, const unsigned char *body, size_t len, void *ud);
+static void fetch_manifest(int manual, int stage) {
+  const char *mf = getenv(stage ? "SB_UPD_MAN" : "SB_UPD_MAN_BETA"); /* (development: other manifests) */
+  net_get_timeout(mf ? mf : stage ? UPD_MAN : UPD_MAN_BETA, 15000, on_manifest, (void *)(size_t)(manual | stage << 1));
 }
-static int is_hex64(const char *s) { for (int i = 0; i < 64; i++) if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0; return !s[64]; }
+static void on_manifest(int st, const unsigned char *body, size_t len, void *ud) {
+  (void)len; int manual = (int)(size_t)ud & 1, stage = (int)(size_t)ud >> 1; lastSt = st;
+  char *txt = NULL; if (st == 200 && body) { txt = malloc(len + 1); if (txt) { memcpy(txt, body, len); txt[len] = 0; } }
+  { cJSON *m = txt ? cJSON_Parse(txt) : NULL; if (cJSON_IsObject(m)) reached = 1; cJSON_Delete(m); }
+  Rel r; int had = txt != NULL, ok = had && upd_from_manifest(SB_APP_ID, txt, !stage, &r); free(txt);
+  if (had && !ok) fprintf(stderr, "[update] the %s manifest does not name this app's package: not used\n", stage ? "stable" : "beta");
+  if (!stage) { fbBetaHas = ok; if (ok) fbBeta = r; fetch_manifest(manual, 1); return; }
+  const Rel *best = upd_newer(ok ? &r : NULL, fbBetaHas ? &fbBeta : NULL); fbBetaHas = 0;
+  done(best, manual);
+}
 static void on_releases(int st, const unsigned char *body, size_t len, void *ud) {
-  (void)len; int manual = (int)(size_t)ud; Rel best; int has = 0; memset(&best, 0, sizeof best); lastSt = st;
-  cJSON *list = st == 200 ? cJSON_Parse((const char *)body) : NULL, *r, *a;
-  const char *pre = SB_APP_ID "_"; size_t pl = strlen(pre);
-  cJSON *arr = cJSON_IsArray(list) ? list : NULL; reached = arr != NULL;
-  cJSON_ArrayForEach(r, arr) {
-    int isPre = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "prerelease"));
-    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "draft")) || (isPre && !update_beta())) continue;
-    cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(r, "assets")) {
-      cJSON *nm = cJSON_GetObjectItemCaseSensitive(a, "name"), *dg = cJSON_GetObjectItemCaseSensitive(a, "digest"), *du = cJSON_GetObjectItemCaseSensitive(a, "browser_download_url");
-      if (!cJSON_IsString(nm) || !cJSON_IsString(dg) || !cJSON_IsString(du)) continue;
-      const char *n = nm->valuestring; int x, y, z, used = 0;
-      if (strncmp(n, pre, pl) || sscanf(n + pl, "%d.%d.%d%n", &x, &y, &z, &used) != 3 || strcmp(n + pl + used, "_arm.ipk")) continue; /* ^<appid>_(\d+\.\d+\.\d+)_arm\.ipk$ */
-      { const char *q = n + pl; for (int i = 0; i < used; i++) if (!((q[i] >= '0' && q[i] <= '9') || q[i] == '.')) used = -1; if (used < 0) continue; }
-      if (strncmp(dg->valuestring, "sha256:", 7) || !is_hex64(dg->valuestring + 7)) continue;
-      char ver[24]; snprintf(ver, sizeof ver, "%.*s", used, n + pl);
-      if (has && ver_cmp(ver, best.ver) <= 0) continue;
-      memset(&best, 0, sizeof best); has = 1; best.beta = isPre; snprintf(best.ver, sizeof best.ver, "%s", ver); snprintf(best.url, sizeof best.url, "%s", du->valuestring); snprintf(best.sha, sizeof best.sha, "%s", dg->valuestring + 7);
-      cJSON *b = cJSON_GetObjectItemCaseSensitive(r, "body"); best.nnotes = notes_from(cJSON_IsString(b) ? b->valuestring : NULL, best.notes);
-    }
-  }
-  cJSON_Delete(list);
-  if (has) done(&best, manual); else { const char *mf = getenv("SB_UPD_MAN"); net_get_timeout(mf ? mf : UPD_MAN, 15000, on_manifest, ud); } /* (SB_UPD_MAN: development, another manifest) */
+  int manual = (int)(size_t)ud; lastSt = st;
+  char *txt = NULL; if (st == 200 && body) { txt = malloc(len + 1); if (txt) { memcpy(txt, body, len); txt[len] = 0; } }
+  Rel best; int res = upd_from_releases(SB_APP_ID, txt, update_beta(), &best); free(txt);
+  reached = res >= 0;
+  if (res == 1) done(&best, manual);
+  else fetch_manifest(manual, update_beta() ? 0 : 1);
 }
 void update_check(int manual) {
   read_current();
