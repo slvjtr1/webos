@@ -250,7 +250,7 @@ char *applog_bundle(void) {
    private key, which never leaves the developer's computer, opens it) and left on telegra.ph (a free public pages
    service, no account) as a page named after a 4-character code and the day. The code finds the page and works for
    a week; shared again with nothing logged since, the same code; anything new, a new code and a new page ---- */
-static const char *LS_PUB = "BLIuZNSRmaaEoIiRID5ATg12qGR3pd7hV+F+IgIr4a/7cyTEro30rPMVdNx2R1aXWTCNuCDfC7AV2GKg8tpvG9w=";
+static const char *LS_PUB = "BAgGcMOCrdgTwkdOVaYb0FJHuGX6+3vvhWTiR6NHPwBq944NuXyrMg8mhxs7mLLty03vR+SNiLyr4Z61hzgYDEg=";
 static struct { int running, state; double at; unsigned long lines; char out[64], code[5], *page, lastCode[5]; int lastOk; unsigned long lastLines; } SH; /* lastCode/lastOk: the last share that worked (its code given again when nothing was logged since) */ /* lines: lineCount when its bundle was made */ /* state: 0 working, 1 ok, -1 failed; touched under mu */
 static void share_set(int st, const char *out) { pthread_mutex_lock(&mu); SH.state = st; snprintf(SH.out, sizeof SH.out, "%s", out); SH.running = 0; free(SH.page); SH.page = NULL; pthread_mutex_unlock(&mu); }
 static const char *api_base(void) { const char *r = getenv("SB_LOGS_RELAY"); return r ? r : "https://api.telegra.ph"; } /* development: a local stand-in */

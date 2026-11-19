@@ -10,10 +10,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="${1:?usage: tools/release.sh VERSION [site-dir]}"
-SITE="${2:-$ROOT/../stremioorigin-site}"
+SITE="${2:-$ROOT/site}"
 ID=tv.stremioorigin.app
-BASE="https://stremio-origin.github.io/webos"
-SRC="https://github.com/stremio-origin/webos"
+BASE="https://origin-webos.vercel.app"
+SRC="https://github.com/slvjtr1/webos"
 [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.0.1"; exit 1; }
 mkdir -p "$SITE"
 
@@ -34,8 +34,6 @@ IPK="$ROOT/dist/${ID}_${VER}_arm.ipk"
 SHA=$(shasum -a 256 "$IPK" | cut -d' ' -f1)
 mkdir -p "$ROOT/dist/dbg/$VER" && cp "$ROOT/build/webos/stremioorigin.dbg" "$ROOT/dist/dbg/$VER/" # kept per version: a shared crash report names its code from it (getlogs)
 
-rm -f "$SITE"/${ID}_*_arm.ipk
-cp "$IPK" "$SITE/"
 cp "$ROOT/pkg/largeIcon.png" "$SITE/icon.png"
 python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" "$ROOT/tools/homebrew" <<'EOF'
 import json, os, sys
@@ -47,7 +45,7 @@ manifest = {
   'id': pid, 'version': ver, 'type': 'native', 'title': 'Stremio Origin',
   'appDescription': 'A native app for Stremio addons, written in C. You bring the account and addons; it ships empty. 28 languages. Unofficial.',
   'iconUri': base + '/icon.png', 'sourceUrl': src, 'rootRequired': False,
-  'ipkUrl': '%s/%s_%s_arm.ipk' % (base, pid, ver), 'ipkHash': {'sha256': sha}}
+  'ipkUrl': '%s/releases/download/v%s/%s_%s_arm.ipk' % (src, ver, pid, ver), 'ipkHash': {'sha256': sha}}
 d = os.path.join(site, 'api', 'apps', pid)
 os.makedirs(os.path.join(d, 'releases'), exist_ok=True)
 for f in (os.path.join(d, 'manifest.json'), os.path.join(d, 'releases', 'latest.json')):
@@ -62,4 +60,4 @@ open(os.path.join(site, 'apps.json'), 'w').write(json.dumps(listing, indent=2) +
 open(os.path.join(d, 'full_description.html'), 'w', encoding='utf-8').write(full)
 print('site updated:', pid, ver, sha)
 EOF
-ls -l "$SITE"/${ID}_*_arm.ipk
+echo "upload $IPK to the GitHub release v$VER, then commit site/ and push (Vercel deploys it)"

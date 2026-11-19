@@ -22,7 +22,7 @@
 static struct { int open, started, state; double at, doneAt, outAt; char out[16], err[200], url[600]; } C; static SGlass glass;
 /* where this build's issues go, and what it says it is: each platform's own repo (an Android TV report filed on the
    webOS repo as "webOS" was the wrong place) */
-static const char *issues_url(void) { return strstr(plat_device_name(), "Android") ? "https://github.com/stremio-origin/androidtv/issues/new" : "https://github.com/stremio-origin/webos/issues/new"; }
+static const char *issues_url(void) { return "https://github.com/slvjtr1/webos/issues/new"; }
 static const char *plat_label(void) { return strstr(plat_device_name(), "Android") ? "Android%20TV" : "webOS"; }
 #define CW 1040.0f
 #define CH 470.0f

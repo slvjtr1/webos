@@ -5,12 +5,12 @@ Two ways: the Homebrew Channel, or the `.ipk` file from a computer.
 ## With the Homebrew Channel
 The Homebrew Channel is installed on TVs set up with the [webOS Homebrew](https://www.webosbrew.org/) tools.
 
-1. **Open the Homebrew Channel** on the TV and search for **Stremio Origin**.
-2. If it doesn't show up, open the channel's settings, choose **Repositories**, and add `https://stremio-origin.github.io/webos/apps.json`.
-3. **Install it**, then open Stremio Origin and sign in with your Stremio account.
+1. **Open the Homebrew Channel** on the TV, open its settings and choose **Repositories**.
+2. **Add** `https://origin-webos.vercel.app/apps.json`.
+3. **Find Stremio Origin** in the list and **install it**, then open Stremio Origin and sign in with your Stremio account.
 
 ## With a computer (Developer Mode)
-**You need:** a computer on the same network as the TV, and `tv.stremioorigin.app_1.1.0_arm.ipk` from this repository's Releases page.
+**You need:** a computer on the same network as the TV, and the latest `tv.stremioorigin.app_<version>_arm.ipk` from [Releases](https://github.com/slvjtr1/webos/releases).
 
 1. **On the TV, open the LG Content Store**, search for **Developer Mode**, and install it.
 2. **Open Developer Mode** and sign in with an LG developer account. It is free: you can make one on the [webOS TV developer site](https://webostv.developer.lge.com/).

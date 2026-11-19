@@ -100,9 +100,9 @@ static const struct { const char *t, *l, *b[MAXB], *ic[MAXB]; int pv, ctl; } TOU
   { "Your keys", "Two keys bring more. OK shows the code for one; you can always add them later in Settings \xe2\x80\xba Keys.",
     { "TMDB: titles and descriptions in your language, and its reviews", "Trakt: the rating, how people spread theirs, and their comments" },
     { "set_lang", "reviews" }, PV_YOURKEYS, 0 },
-  { "Thank you", "Made by one person in free time. No ads and no tracking.",
-    { "Something wrong? Settings \xe2\x80\xba About \xe2\x80\xba Share logs", "Enjoying it? Support it, or star it on GitHub" },
-    { "g_bug", "g_heart" }, PV_THANKS, 0 },
+  { "Thank you", "No ads and no tracking.",
+    { "Something wrong? Settings \xe2\x80\xba About \xe2\x80\xba Share logs" },
+    { "g_bug" }, PV_THANKS, 0 },
 };
 #define NTOUR (int)(sizeof TOUR / sizeof TOUR[0])
 static int ykOff; /* the keys page's first step, when TMDB is built in: Trakt's */

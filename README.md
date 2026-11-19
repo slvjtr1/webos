@@ -40,14 +40,14 @@
 - 28 languages, Arabic included (right to left); updates and Share logs from the app
 
 ## Install
-LG TVs on webOS 3 or later (ARM). With the Homebrew Channel, search for Stremio Origin. If it doesn't show up, add the repository `https://stremio-origin.github.io/webos/apps.json`. Or install the `.ipk` from [Releases](https://github.com/stremio-origin/webos/releases) with the TV in Developer Mode.
+LG TVs on webOS 3 or later (ARM). In the Homebrew Channel, open Settings > Repositories and add `https://origin-webos.vercel.app/apps.json`, then install Stremio Origin from it. Or install the `.ipk` from [Releases](https://github.com/slvjtr1/webos/releases) with the TV in Developer Mode. Step by step: [install guide](docs/install.md) or [the website](https://origin-webos.vercel.app).
 
 ## Compatibility
 Developed and tested on webOS 4.4, and reported working on webOS 4 to 25. [More](docs/compatibility.md).
 
 ## Privacy
 - Sign-in goes directly to Stremio. Your account stays on the TV.
-- No analytics. Nothing is sent to the developer.
+- No analytics. Nothing is sent to us.
 - Logs stay on the TV. Sharing them is your choice: Settings > About > Share logs.
 
 ## Trakt
@@ -55,10 +55,11 @@ Trakt is optional. You link it with a code and the sign-in stays on the TV. Whil
 
 Stremio Origin uses Trakt but is not endorsed or certified by Trakt.
 
-## Support
-- <img src="docs/heart.svg" height="18" align="top"> Support the project / Request a feature: [Ko-fi](https://ko-fi.com/simussu) <img src="docs/heart.svg" height="18" align="top">
-- <img src="docs/discord.svg" height="18" align="top"> [Discord](https://discord.gg/SJEtyV3kW6)
-- Report bugs/issues: [stremio-origin/webos/issues](https://github.com/stremio-origin/webos/issues)
+## Problems and requests
+Open an [issue](https://github.com/slvjtr1/webos/issues). Add a log code if you can: Settings > About > Share logs.
+
+## License
+GPL-3.0, see [LICENSE](LICENSE). This is a modified version of Stremio Origin; the changes are in this repository's history.
 
 ## Credits
 - Interface sounds: [Interface Sounds](https://kenney.nl/assets/interface-sounds) by Kenney (CC0).

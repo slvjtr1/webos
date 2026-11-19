@@ -74,7 +74,7 @@ static void selftest(void) {
   else if (app_now() > 40) { fprintf(stderr, "[supcard-selftest] FAILED: the card did not show and close\n"); exit(3); } }
 void supportcard_tick(void) {
   selftest();
-  if (C.open || C.shown) return;
+  if (C.open || C.shown || !welcome_support_url()[0]) return; /* (no support link in this build: never) */
   int due = supc_due(supc_store()) || (C.forceAt > 0 && app_now() >= C.forceAt);
   if (!due || !app_splash_done || SCR != SCR_HOME || app_overlay || welcome_is_open() || player_open() || app_idle() < 1.5f) return; /* (Home, still a moment, nothing else up) */
   if (!welcome_support_url()[0] && !welcome_github_url()[0]) return; /* (no codes in this build: nothing to show) */

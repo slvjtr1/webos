@@ -40,7 +40,6 @@
 #include "ui/qr.h"
 #include "ui/support.h"
 #define SUP_H 520.0f
-#define DISCORD_URL "https://discord.gg/SJEtyV3kW6"
 #define LOOK_H 300.0f
 #define KEYS_H 446.0f
 #define ACCT_H 150.0f
@@ -181,7 +180,6 @@ static void relang(void) { for (int i = 0; i < ncat; i++) if (cats[i].opts == la
 static void on_tmdb_card(int on, void *ud) { (void)ud; if (on == tmdbOn) return; relang(); if (on) toast(T("Titles and descriptions in your language"), 2000, NULL); }
 static void on_trakt_card(int on, void *ud) { (void)ud; if (on == traktOn) return; relang(); if (on) toast(T("Ratings and comments now come from Trakt too"), 2000, NULL); }
 /* About: the update rows (as the update stands now) and Share logs */
-static void discord_card(void);
 static unsigned aboutSeen;
 static int about_opts(void) {
   int n = 0; const char *av = update_avail(); int st = update_state(); aboutSeen = update_serial();
@@ -189,7 +187,6 @@ static int about_opts(void) {
   if (av) { Setting *s = &supS[n++]; set_act(s, "__upd", st == UPD_INSTALLING ? T1("Installing version {v}…", "v", av) : T1("Install version {v}", "v", av), update_msg()); s->raw = 1; }
   { Setting *s = &supS[n++]; set_act(s, "__check", T("Check for updates"), ""); s->raw = 1; } /* (its answer comes as a toast) */
   set_act(&supS[n++], "__logs", "Share logs", "");
-  set_act(&supS[n++], "__discord", "Join our Discord", ""); /* Discord's mark beside it; OK: a card with its code (before the support row: that one takes the room left) */
   if (welcome_support_url()[0]) set_act(&supS[n++], "__support", "Support the project / Request a feature", "Your support keeps it going, and feature requests are welcome there. A star helps others find it"); /* its codes in view (sized as if last) */
   set_s(&supS[n++], "nerdStats", "Stats for nerds", "", OO, 2, "false"); /* under it: the list scrolls to it */
   return n;
@@ -519,7 +516,7 @@ static int key(int k) {
       if (!strcmp(op->k, "__keys")) { settings_open_keys(); return 1; }
       if (!strcmp(op->k, "__traktUnlink")) { scrobble_unlink(); board_invalidate(); trakt_relayout(); toast(T("Trakt is disconnected"), 2000, NULL); return 1; }
       if (!strcmp(op->k, "__sync")) sync_now(); else if (!strcmp(op->k, "__logs")) logcard_show(); else if (!strcmp(op->k, "__guide")) welcome_show_guide();
-      else if (!strcmp(op->k, "__support")) { if (welcome_github_url()[0]) { supWant = !supWant; tween_to(&supK, (float)supWant, 0.5f, EASE_IN_OUT); orbs_pulse(supWant ? ORB_RIGHT : ORB_LEFT, 0.6f); } } /* the other code, turned over */ else if (!strcmp(op->k, "__upd")) update_install(); else if (!strcmp(op->k, "__check")) { if (update_state() != UPD_CHECKING) toast(T("Checking for updates…"), 1500, NULL); update_check(1); } else if (!strcmp(op->k, "__discord")) discord_card(); else if (!strcmp(op->k, "__logout")) logout(); return 1; } /* (only Log out signs out: a row with no action of its own does nothing) */
+      else if (!strcmp(op->k, "__support")) { if (welcome_github_url()[0]) { supWant = !supWant; tween_to(&supK, (float)supWant, 0.5f, EASE_IN_OUT); orbs_pulse(supWant ? ORB_RIGHT : ORB_LEFT, 0.6f); } } /* the other code, turned over */ else if (!strcmp(op->k, "__upd")) update_install(); else if (!strcmp(op->k, "__check")) { if (update_state() != UPD_CHECKING) toast(T("Checking for updates…"), 1500, NULL); update_check(1); } else if (!strcmp(op->k, "__logout")) logout(); return 1; } /* (only Log out signs out: a row with no action of its own does nothing) */
     if (is_switch(op)) { set_val(op, !strcmp(cur_val(op), "true") ? "false" : "true", 0); return 1; } /* a switch: OK flips it */
     open_pick(); return 1; }
   return 1;
@@ -937,13 +934,6 @@ static void draw_support(const Setting *o, float x, float y, float h, int f, flo
   if (gh[0]) key_hint(L, ty + th + 10 + nl * DS_LH + 16 + 20, K_OK, supWant ? T("Support on Ko-fi") : T("Star on GitHub"), f ? ACC_FG : WHITE_A(200), rtl);
   support_glass(0); support_draw(qx, qy, Q, gh[0] ? supK.v : 0, f, welcome_support_url(), NULL, gh, NULL);
 }
-/* the community: Discord's mark in its colour beside the row's words; OK opens its code on a card like the others */
-#define DISC_B 36.0f /* (inside an ordinary row: Join our Discord is as tall as the others, only Support stays big) */
-static void disc_badge(float x, float y, int f) { gfx_rrect(x, y, DISC_B, DISC_B, DISC_B * 0.28f, RGB(0x58, 0x65, 0xf2)); if (f) gfx_ring(x, y, DISC_B, DISC_B, DISC_B * 0.28f, 2, WHITE_A(200)); icon_draw("discord", x + DISC_B * 0.18f, y + DISC_B * 0.18f, DISC_B * 0.64f, WHITE_A(255)); }
-static void discord_card(void) {
-  QrCardOpts o; memset(&o, 0, sizeof o); o.title = T("Join our Discord"); o.sub = T("News, help and requests: scan with your phone"); o.url = DISCORD_URL;
-  o.badge = "discord"; o.badgeBg = RGB(0x58, 0x65, 0xf2); qrcard_show(&o);
-}
 static void draw_row(const Setting *o, int i, float x, float y, float h, int f, float nx, float ny) {
   if (!strcmp(o->k, "__support")) { draw_support(o, x, y, h, f, nx, ny); return; }
   int rtl = app_rtl(), al = rtl ? ALIGN_RIGHT : ALIGN_LEFT, ar = rtl ? ALIGN_LEFT : ALIGN_RIGHT; RowA *r = &S.ra[i];
@@ -956,7 +946,7 @@ static void draw_row(const Setting *o, int i, float x, float y, float h, int f, 
   const RowC *rc = i < MAXROWS ? row_c(o, i) : NULL; if (!rc) return;
   int busy = rc->busy, sw = is_switch(o) && !busy; float rw = rc->rw[f ? 1 : 0], tw = CLW - 48 - rw;
   uint32_t lc = col_mix(o->action ? ACC3 : WHITE_A(255), ACC_FG, fk), dc = col_mix(WHITE_A(199), col_alpha(ACC_FG, 0.85f), fk);
-  int trk = !strcmp(o->k, "__traktUnlink") || !strcmp(o->k, "__discord") || !strncmp(o->k, "__lang:", 7);
+  int trk = !strcmp(o->k, "__traktUnlink") || !strncmp(o->k, "__lang:", 7);
   if (!strncmp(o->k, "__lang:", 7) && !strcmp(o->k + 7, store_get("uiLang", "auto"))) icon_draw("check", rtl ? R : R - 28, y + h / 2 - 14, 28, col_mix(ACC3, ACC_FG, fk)); /* (the language in use) */ if (trk) lc = col_mix(WHITE_A(255), ACC_FG, fk); /* Trakt's rows read like any setting (not the action colour); its mark says whose they are */
   if (o->off) { lc = col_mix(WHITE_A(110), WHITE_A(235), fk); dc = col_mix(WHITE_A(96), WHITE_A(200), fk); }
   if (o->danger) { lc = col_mix(RGB(0xef, 0x8f, 0x8a), WHITE_A(255), fk); gfx_rect(x + 24, y - ROWGAP / 2.0f - 9, CLW - 48, 1, WHITE_A(40)); /* (a line above it, as over Log out) */
@@ -969,7 +959,6 @@ static void draw_row(const Setting *o, int i, float x, float y, float h, int f, 
     for (int k = 0; k <= 14; k++) { float t = k * 1.5708f / 14; gfx_circle(gx + d * (rr - rr * cosf(t)), ey - rr + rr * sinf(t), 1, jc); } /* the turn */
     gfx_rrect(rtl ? ex : gx + rr, ey - 1, fabsf(ex - (gx + d * rr)), 2, 1, jc);
     L += rtl ? -SUBIN : SUBIN; tw -= SUBIN; }
-  if (!strcmp(o->k, "__discord")) { disc_badge(rtl ? L - DISC_B : L, y + h / 2 - DISC_B / 2, f); L += rtl ? -(DISC_B + 16) : DISC_B + 16; tw -= DISC_B + 16; } /* Discord's mark before its words */
   line(o->raw ? o->lb : T(o->lb), L, y + 16, 34, o->sub ? 26 : 28, 600, lc, -0.2f, tw, al);
   if (o->ds[0] && keep_ds(o)) { text_draw_wrapped(o->raw ? o->ds : T(o->ds), L, y + 16 + 34 + 4 + (DS_LH - text_line_height(DS_PX)) / 2, tw, 3, DS_PX, 400, dc, 0, al, DS_LH); }
   if (tk < 1) { gfx_offset_pop(); gfx_opacity_pop(); }

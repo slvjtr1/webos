@@ -9,6 +9,5 @@
   {"icon": "collection", "title": "Film collections", "text": "On the title page and in the Library, and the next film after the credits."},
   {"icon": "wn_lib", "title": "28 languages", "text": "Greek, Brazilian Portuguese, Romanian and Hungarian among them."},
   "And much more."
- ],
- "support": {"title": "Thank you", "message": "Thank you!", "url": "https://ko-fi.com/simussu", "github": "https://github.com/stremio-origin/webos"}
+ ]
 }

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stremio Origin for LG webOS</title>
+<meta name="description" content="A native app for Stremio addons on LG webOS TVs, written in C. Install with the Homebrew Channel or Developer Mode.">
+<link rel="icon" href="favicon.png">
+<meta name="theme-color" content="#0c0b11">
+<style>
+:root{--bg:#0c0b11;--card:#15131d;--line:#26222f;--text:#eeeaf6;--dim:#a29cb3;--acc:#6a45e0;--acc2:#8f72ff}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;overflow-x:hidden}
+body::before{content:"";position:fixed;inset:-20vh -20vw auto;height:80vh;background:radial-gradient(closest-side,rgba(106,69,224,.28),transparent);pointer-events:none;z-index:-1;animation:drift 18s ease-in-out infinite alternate}
+@keyframes drift{to{transform:translate(8vw,6vh) scale(1.1)}}
+@media (prefers-reduced-motion:reduce){body::before{animation:none}.rise{animation:none!important;opacity:1!important}}
+.wrap{max-width:960px;margin:0 auto;padding:0 20px}
+header{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.02em;text-decoration:none;color:var(--text)}
+.brand img{width:36px;height:36px}
+nav a{color:var(--dim);text-decoration:none;margin-left:20px;font-size:15px}
+nav a:hover{color:var(--text)}
+.hero{padding:48px 0 28px;text-align:center}
+.hero h1{font-size:clamp(34px,6vw,58px);line-height:1.08;letter-spacing:-.02em;font-weight:800}
+.hero h1 span{background:linear-gradient(90deg,var(--acc2),#c4b4ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--dim);font-size:clamp(16px,2.2vw,19px);max-width:600px;margin:18px auto 0}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;border-radius:999px;font-weight:600;text-decoration:none;transition:transform .2s,background .2s}
+.btn:hover{transform:translateY(-2px)}
+.btn.main{background:var(--acc);color:#fff;box-shadow:0 10px 30px -10px rgba(106,69,224,.8)}
+.btn.main:hover{background:#7652ee}
+.btn.alt{border:1px solid var(--line);color:var(--text)}
+.ver{margin-top:14px;font-size:14px;color:var(--dim);min-height:1.6em}
+.shot{margin:40px auto 0;border-radius:22px;overflow:hidden;box-shadow:0 40px 80px -30px rgba(0,0,0,.8)}
+.shot img{display:block;width:100%;height:auto}
+section{padding:56px 0 8px}
+h2{font-size:26px;letter-spacing:-.01em;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px}
+.card h3{font-size:17px;margin-bottom:8px}
+.card p,.card li{color:var(--dim);font-size:15px}
+ol{padding-left:20px}
+ol li{margin:6px 0}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#211d2b;padding:2px 7px;border-radius:6px;color:#d8ceff;word-break:break-all}
+.copy{display:flex;gap:8px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+.copy code{flex:1;min-width:0;padding:10px 12px}
+.copy button{border:0;background:var(--acc);color:#fff;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+.feat{columns:2 260px;column-gap:28px;color:var(--dim)}
+.feat li{break-inside:avoid;margin:0 0 9px 18px}
+footer{color:var(--dim);font-size:13px;padding:56px 0 40px;text-align:center}
+footer a{color:var(--dim)}
+.rise{opacity:0;animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+.d1{animation-delay:.08s}.d2{animation-delay:.16s}.d3{animation-delay:.24s}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@media (max-width:560px){nav a{margin-left:14px}nav a.hide{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="./"><img src="mark.png" alt="">Stremio Origin</a>
+    <nav><a href="#install">Install</a><a class="hide" href="#features">Features</a><a href="https://github.com/slvjtr1/webos">GitHub</a></nav>
+  </header>
+
+  <div class="hero">
+    <h1 class="rise">Your Stremio addons,<br><span>native on LG TVs.</span></h1>
+    <p class="rise d1">A fast app for LG webOS, written in C. You bring your Stremio account and your addons. It ships empty and plays only the links your addons return.</p>
+    <div class="cta rise d2">
+      <a class="btn main" href="#install">Install on your TV</a>
+      <a class="btn alt" id="dl" href="https://github.com/slvjtr1/webos/releases/latest">Download .ipk</a>
+    </div>
+    <div class="ver" id="ver"></div>
+    <div class="shot rise d3"><img src="header.jpg" width="1600" height="375" alt="The app's top bar over a row of posters"></div>
+  </div>
+
+  <section id="install">
+    <h2>Install</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Homebrew Channel</h3>
+        <p>For TVs set up with the <a href="https://www.webosbrew.org/" style="color:var(--acc2)">webOS Homebrew</a> tools. Updates arrive by themselves.</p>
+        <ol>
+          <li>Open the Homebrew Channel, then its settings, then <b>Repositories</b>.</li>
+          <li>Add this address:</li>
+        </ol>
+        <div class="copy"><code id="repo">https://origin-webos.vercel.app/apps.json</code><button type="button" id="cp">Copy</button></div>
+        <ol start="3"><li>Find <b>Stremio Origin</b> in the list and install it.</li></ol>
+      </div>
+      <div class="card">
+        <h3>Developer Mode</h3>
+        <ol>
+          <li>Install <b>Developer Mode</b> from the LG Content Store, sign in, turn on Dev Mode and Key Server.</li>
+          <li>On a computer, install <a href="https://github.com/webosbrew/dev-manager-desktop/releases" style="color:var(--acc2)">Device Manager for webOS</a> and add the TV.</li>
+          <li>Download the latest <code>.ipk</code> from <a href="https://github.com/slvjtr1/webos/releases/latest" style="color:var(--acc2)">Releases</a> and install it.</li>
+        </ol>
+        <p style="margin-top:10px">Developer Mode runs out after a while: press <b>Extend</b> in its app to keep it on.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2>What it does</h2>
+    <ul class="feat">
+      <li>Home, Discover, Library and Search from your Stremio account</li>
+      <li>Seek previews on the seek bar, for debrid and direct links</li>
+      <li>The best stream in one press, and a sources tray per addon</li>
+      <li>Styled subtitles with fonts, size, colour, position and sync</li>
+      <li>Subtitles and audio remembered for each show</li>
+      <li>Chapters, skip intro and recap, next-episode card</li>
+      <li>Live TV and sports from your addons</li>
+      <li>Film collections, and the next film after the credits</li>
+      <li>Trakt: link with a code, scrobbling and watched marks</li>
+      <li>Dolby Vision, DTS sound converted on the TV</li>
+      <li>Torrents, with an optional USB drive</li>
+      <li>28 languages, Arabic included</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Something wrong?</h2>
+    <div class="card">
+      <p>On the TV open <b>Settings › About › Share logs</b>. You get a short code. Then open an <a href="https://github.com/slvjtr1/webos/issues" style="color:var(--acc2)">issue on GitHub</a> with the code and what happened.</p>
+    </div>
+  </section>
+
+  <footer>
+    Stremio Origin is independent and unofficial. Stremio™ and LG are trademarks of their owners; this project is not affiliated with or endorsed by them.<br>
+    Free software under the <a href="https://github.com/slvjtr1/webos/blob/main/LICENSE">GPL-3.0</a>.
+  </footer>
+</div>
+<script>
+(function(){
+  var b=document.getElementById('cp'),r=document.getElementById('repo');
+  b.addEventListener('click',function(){
+    var t=r.textContent;
+    (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1600)},function(){var s=document.createRange();s.selectNodeContents(r);var w=getSelection();w.removeAllRanges();w.addRange(s)});
+  });
+  fetch('https://api.github.com/repos/slvjtr1/webos/releases/latest').then(function(x){return x.ok?x.json():null}).then(function(j){
+    if(!j||!j.tag_name)return;
+    document.getElementById('ver').textContent='Latest: '+j.tag_name.replace(/^v/,'version ')+' · '+new Date(j.published_at).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+    var a=(j.assets||[]).filter(function(a){return /\.ipk$/.test(a.name)})[0]; if(a)document.getElementById('dl').href=a.browser_download_url;
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>
