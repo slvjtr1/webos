@@ -1,3 +1,4 @@
+#include "core/submarks.h"
 #include "platform/plat.h"
 #include "core/subs.h"
 #include "core/forcedsubs.h"
@@ -22,8 +23,10 @@ static int tc(const char *s, double *out, const char **end) {
 }
 static int cmp_cue(const void *a, const void *b) { double x = ((const Cue *)a)->s, y = ((const Cue *)b)->s; return x < y ? -1 : x > y; }
 static void cue_add(Cue **cues, int *n, int *cap, double s, double e, const char *t) {
-  if (*n == *cap) { *cap = *cap ? *cap * 2 : 256; *cues = realloc(*cues, *cap * sizeof **cues); }
-  (*cues)[*n].s = s; (*cues)[*n].e = e; (*cues)[*n].t = strdup(t); (*n)++;
+  char *c = strdup(t); if (!c) return;
+  if (sub_marks_on) { sub_marks_clean(c); if (!*c) { free(c); return; } } /* (a line that was only marks: nothing to show) */
+  if (*n == *cap) { int nc = *cap ? *cap * 2 : 256; Cue *g = realloc(*cues, nc * sizeof **cues); if (!g) { free(c); return; } *cues = g; *cap = nc; }
+  (*cues)[*n].s = s; (*cues)[*n].e = e; (*cues)[*n].t = c; (*n)++;
 }
 
 /* ---- the bytes as UTF-8 text ---- */

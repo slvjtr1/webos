@@ -75,7 +75,7 @@ void plat_window_size(int *w, int *h, Uint32 *flags) { *w = 1920; *h = 1080; *fl
   { int major = 0; const char *v = strstr(devName, "webOS "); if (v) major = atoi(v + 6); if (major > 0 && major < 4) { *flags |= SDL_WINDOW_FULLSCREEN; fprintf(stderr, "[start] webOS %d: a full-screen window\n", major); } }
   const char *v = getenv("SB_WIN"); if (v) { int a, b, f; if (sscanf(v, "%dx%d:%d", &a, &b, &f) == 3) { *w = a; *h = b; *flags = SDL_WINDOW_OPENGL | (f & 1 ? SDL_WINDOW_FULLSCREEN : 0) | (f & 2 ? SDL_WINDOW_ALLOW_HIGHDPI : 0) | (f & 4 ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0); } } /* SB_WIN=3840x2160:2 to try other surface requests */ }
 int plat_map_key(const SDL_KeyboardEvent *e) {
-  switch (e->keysym.scancode) {
+  switch ((int)e->keysym.scancode) { /* (int: webOS adds its own codes past the enum) */
     case SDL_WEBOS_SCANCODE_BACK: return K_BACK;
     case SDL_WEBOS_SCANCODE_RED: return K_RED; case SDL_WEBOS_SCANCODE_GREEN: return K_GREEN;
     case SDL_WEBOS_SCANCODE_YELLOW: return K_YELLOW; case SDL_WEBOS_SCANCODE_BLUE: return K_BLUE;

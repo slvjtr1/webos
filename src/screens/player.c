@@ -1,3 +1,6 @@
+#include "core/memtrim.h"
+#include "core/tvtune.h"
+#include "core/submarks.h"
 #include "screens/player.h"
 #include "core/traktwatch.h"
 #include "screens/board.h"
@@ -298,7 +301,7 @@ static MkvSession *prev_src_pick(void) {
    its seek previews; it loads meanwhile and waits on its first frame behind the art, so OK (Play now) or the share
    reached starts it at once. The time left is estimated from the pace so far. It gives up (the film starts) when no
    picture has come for 20 s, the film has none, or after 4 minutes. */
-static int pw_target(void) { const char *v = store_get("seekPreviewsWait", "80"); /* (on by default: 80 %) */ if (!strcmp(v, "true")) return 70; int n = atoi(v); return n >= 50 && n <= 100 ? n : 0; }
+static int pw_target(void) { const char *v = store_get("seekPreviewsWait", "false"); /* (off by default: the film starts at once, its previews fill in as it plays) */ if (!strcmp(v, "true")) return 70; int n = atoi(v); return n >= 50 && n <= 100 ? n : 0; }
 static int pw_wanted(void) { return pw_target() > 0 && prev_enabled() && prev_available() && !P.adopt && !P.isTrailer && !P.isHls && !P.isP2p && !strncmp(P.url, "http", 4) && !live_title(); }
 __attribute__((weak)) void video_start_silent(int on) { (void)on; } /* (a platform without it: as before) */
 static void pw_end(const char *why) { if (!P.pw.on) return; P.pw.on = 0; video_start_silent(0); video_set_volume(100, 300); /* (its sound comes up softly as it starts) */ fprintf(stderr, "[player] previews first: %d %% of %d %% in %.1f s (%s), the film starts\n", sp_progress() < 0 ? 0 : sp_progress(), P.pw.target, now_() - P.pw.t0, why);
@@ -784,6 +787,9 @@ static void sync_tick(void) {
 static void set_audio(int i) { P.curAud = i; video_select_audio(i); P.infoKey[0] = 0; }
 /* ---- sound this TV can't decode: DTS where it was seen failing (or not yet seen playing), TrueHD always (passed
    through to a receiver only), and any codec the TV refused on this stream (error 200: the picture plays on) ---- */
+/* the converted sound's channels (Settings > Audio > Converted sound): Auto, stereo when the TV plays through its own
+   speakers (5.1 folded by the TV loses the dialogue under the music), 5.1 for a soundbar or a receiver */
+static int conv_stereo(void) { const char *v = store_get("dtsOut", "auto"); if (!strcmp(v, "stereo")) return HC_STEREO; if (!strcmp(v, "surround")) return 0; return tvtune_sound_out() == 1 ? HC_STEREO : 0; }
 static int aud_kind(const char *codec) { /* 1 DTS, 2 TrueHD, 0 another; the TV's names ("dts") and Matroska's ("A_DTS") alike */
   char c[32]; lower(codec, c, sizeof c); return strstr(c, "dts") ? 1 : (strstr(c, "truehd") || strstr(c, "mlp")) ? 2 : 0; }
 __attribute__((weak)) int video_audio_plays(int idx) { (void)idx; return -1; } /* (a platform that can't say: the codec rules below) */
@@ -847,7 +853,7 @@ static int dts_convert(int tvIdx, const char *why) {
   if (ord >= m || (ord >= 0 && !aud_kind(ma[ord].codec))) ord = -1; /* (the TV's list and the file's disagree: the first DTS / TrueHD one) */
   P.dts.conv = 1; P.dts.convOrd = ord; P.dts.hevc = hevc; P.dts.convT0 = now_(); P.dts.convAt = P.live ? video_time() : P.startAt;
   P.dts.dv = dv7_wanted(); P.dts.copyA = 0; P.dts.dvTried = 1; /* a profile 7 picture: 8.1 in the same run */
-  hls_conv_start(P.url, ord, (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (P.dts.dv == 7 ? HC_DV81 : 0));
+  hls_conv_start(P.url, ord, (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (P.dts.dv == 7 ? HC_DV81 : 0) | conv_stereo());
   fprintf(stderr, "[dts] path c: converting audio track %d (%s, %s%s) at %.0f s\n", ord, why, hevc ? "HEVC" : vc[0] ? vc : "video", P.dts.dv == 7 ? ", Dolby Vision 7 as 8.1" : P.dts.dv ? ", Dolby Vision kept" : "", P.dts.convAt);
   toast(T("Converting the sound for this TV…"), 4000, NULL);
   return 1;
@@ -886,14 +892,14 @@ static int dv7_audio(int *copy) {
 }
 static int conv_flags(int ord) { /* another audio track while converting */
   MkvAudio ma[16]; int m = mkv_audio_tracks(mkv, ma, 16), copy = P.dts.dv && ord >= 0 && ord < m && !mkv_aud_bad(&ma[ord]) && aud_copyable(ma[ord].codec);
-  return (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (P.dts.dv == 7 ? HC_DV81 : 0) | (copy ? HC_COPYAUDIO : 0);
+  return (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (P.dts.dv == 7 ? HC_DV81 : 0) | (copy ? HC_COPYAUDIO : 0) | conv_stereo();
 }
 static int dv7_convert(const char *why) {
   int prof = P.dts.conv || P.dts.dvTried ? 0 : dv7_wanted(); if (!prof) return 0;
   P.dts.dvTried = 1; int copy = 1, ord = dv7_audio(&copy);
   if (ord < 0) { fprintf(stderr, "[dv] profile %d, but no audio track can go with it: played as it is\n", prof); return 0; }
   P.dts.conv = 1; P.dts.convOrd = ord; P.dts.dv = prof; P.dts.copyA = copy; P.dts.hevc = 1; P.dts.convT0 = now_(); P.dts.convAt = P.live ? video_time() : P.startAt;
-  hls_conv_start(P.url, ord, (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (prof == 7 ? HC_DV81 : 0) | (copy ? HC_COPYAUDIO : 0));
+  hls_conv_start(P.url, ord, (mkv_has_index(mkv) == 0 ? HC_NOINDEX : 0) | (prof == 7 ? HC_DV81 : 0) | (copy ? HC_COPYAUDIO : 0) | conv_stereo());
   fprintf(stderr, "[dv] profile %d (%s): the picture %s, audio track %d %s, from %.0f s\n", prof, why, prof == 7 ? "as 8.1" : "as it is, its Dolby Vision kept", ord, copy ? "copied" : "as Dolby Digital", P.dts.convAt);
   return 1;
 }
@@ -1074,6 +1080,14 @@ static void sk_tick(void) {
   if (!P.sk.tok || P.sk.sent) return; double n = now_();
   for (int i = 0; i < 3; i++) if (P.sk.job[i].live && P.sk.job[i].retryAt && n >= P.sk.job[i].retryAt) sk_ask(i);
   if (!P.sk.sent && ((P.sk.quickAt && n >= P.sk.quickAt) || n >= P.sk.endAt)) sk_finish();
+}
+/* drawn from Japan (its genres say Anime, or Animation with Japan as its country): the anime upscale level, else the films' */
+static int is_anime(void) {
+  const cJSON *m = sb_meta_cached(P.type, P.id), *g; int anim = 0, jp = 0; if (!m) return 0;
+  cJSON_ArrayForEach(g, js_arr(m, "genres")) if (cJSON_IsString(g)) { if (!strcmp(g->valuestring, "Anime")) return 1; if (!strcmp(g->valuestring, "Animation")) anim = 1; }
+  const cJSON *c = cJSON_GetObjectItemCaseSensitive(m, "country"); if (cJSON_IsString(c) && strstr(c->valuestring, "Japan")) jp = 1;
+  if (anim && !jp) { const char *id = P.id; if (!strncmp(id, "kitsu:", 6) || !strncmp(id, "mal:", 4) || !strncmp(id, "anilist:", 8) || !strncmp(id, "anidb:", 6)) return 1; }
+  return anim && jp;
 }
 static void load_skips(void) {
   if (P.isTrailer || P.skipsAsked || !P.id[0]) return; P.skipsAsked = 1;
@@ -2231,7 +2245,7 @@ static void finish_close(void) { if (hub_on() && hub_player_mode()) hub_close();
 static int closeNext, closeSim, closeArt; static double closeAt, closeT0; /* closeArt: closed on the loading screen (its line and words fade as the logo flies back) */
 static void close_player(int goNext, int goSim) {
   if (!P.open || P.closing) return; if (bestTok) { best_choose_cancel(bestTok); bestTok = 0; } P.closing = 1; ps_hold(0); sp_verify_reset(); np_stop(); NP.vid[0] = 0; /* (the next episode's pictures made so far: kept) */ /* (a lighter copy not taken yet: it reads on freely, nothing plays) */ closeArt = !P.live && P.artA.v > 0.999f; closeT0 = now_(); sx_begin_quick(0); /* the player's logo moves back to the page */ closeNext = goNext; closeSim = goSim; P.ssOn = 0; P.nx.tok = 0; P.sk.tok = 0;
-  scrobble_player_end(video_time(), dur(), 0); save_progress(1); video_pause(); /* (Test playback: nothing told, nothing kept) */
+  scrobble_player_end(video_time(), dur(), 0); save_progress(1); video_pause(); tvtune_stop(); mem_trim_soon(1.5, "the film closed"); /* (Test playback: nothing told, nothing kept) */
   /* the title's own picture fades back over the paused frame, the video goes, then the cover fades onto the app */
   closeAt = now_() + (closeArt ? 0.01 : 0.26); /* the cover fades back over the paused frame (see css()); from the loading screen the art fades at once, under the logo on its way back */
 }
@@ -2480,7 +2494,8 @@ void player_tick(float dt) {
      been steady for a moment (never a frozen first frame, then a spinner) */
   if (P.liveT0 && !P.autoAudDone && now_() - P.liveT0 < 15) { static double aAt; if (now_() - aAt > 0.5) { aAt = now_(); auto_audio(); } } /* (the player may list the file's tracks a moment after the first picture: asked again until it has, 15 s at most) */
   if (!P.live && P.started && video_live()) { /* (P.started: this title's own stream asked for, as start_video says; before it, a picture still running is another's: Home's trailer while the best stream is chosen) */
-    if (!P.liveT0) { P.liveT0 = now_(); P.steadyAt = 0; apply_aspect(); try_resume(); auto_audio(); load_emb_tracks(); }
+    if (!P.liveT0) { P.liveT0 = now_(); P.steadyAt = 0; apply_aspect(); try_resume(); auto_audio(); load_emb_tracks(); if (!P.isTrailer) tvtune_start(is_anime()); } /* the TV's picture and sound tuned for this title (Settings > Picture, Audio) */
+    { char tm[96]; if (tvtune_poll(tm, sizeof tm)) toast(tm, 3000, NULL); } /* (once, only when the TV took it) */
     int steady = (video_state() == VID_PLAYING || paused()) && !video_settling(); if (!steady) P.steadyAt = 0; else if (!P.steadyAt) P.steadyAt = now_();
     if ((P.steadyAt && now_() - P.steadyAt > (P.quiet ? 0.06 : 0.35)) || now_() - P.liveT0 > 15) { /* (a channel switched to: up at its first frames) */ P.live = 1; pg_ask(); if (live_title()) live_reach_set(P.id, 1); /* (a channel: it really plays) */ fprintf(stderr, "[player] picture running after %.1f s\n", now_() - P.liveT0); if (resumeMsg[0]) { toast(resumeMsg, 2500, NULL); resumeMsg[0] = 0; }
       { static int tr; const char *e = getenv("SB_PLAY_TRAY"); if (e && !tr) { tr = 1; open_tray(!strcmp(e, "src") ? 2 : !strcmp(e, "eps") ? 1 : !strcmp(e, "aud") ? 3 : 4); } } } } /* (development: SB_PLAY_TRAY=src|eps|aud|subs opens that tray once the picture runs, for pictures of it) */
@@ -2603,11 +2618,12 @@ static void draw_art(void) {
   gfx_opacity_pop();
 }
 /* the subtitle style, read once while the settings stay as they are */
-typedef struct { unsigned ser; int px; uint32_t col, ol; float bo; } SubStyle;
+typedef struct { unsigned ser; int px; uint32_t col, ol; float bo; int sh; } SubStyle;
 static const SubStyle *sub_style(void) {
   static SubStyle st; if (st.ser == store_serial() && st.ser) return &st;
   st.ser = store_serial(); st.px = (int)(38 * SUB_SIZES[size_idx()] / 100.0f + 0.5f); st.col = hexcol(store_get("subsColor", "#ffffff")); st.ol = hexcol(store_get("subsOutlineColor", "#000000")); st.bo = (float)atof(SUB_BGS[bg_idx()]);
-  { float k = atoi(SUB_BRIGHT[bright_idx()]) / 100.0f; st.col = col_dim(st.col, k); st.ol = col_dim(st.ol, k); asssubs_brightness(k); } /* (the brightness: plain, embedded and styled lines alike) */
+  { float k = atoi(SUB_BRIGHT[bright_idx()]) / 100.0f; st.col = col_dim(st.col, k); st.ol = col_dim(st.ol, k); asssubs_brightness(k); }
+  { const char *v = store_get("subsShadow", "medium"); st.sh = !strcmp(v, "off") ? 0 : !strcmp(v, "light") ? 1 : !strcmp(v, "strong") ? 3 : 2; } /* (the brightness: plain, embedded and styled lines alike) */
   return &st;
 }
 /* the cue list's index, made once per list: whether it runs in start order, and the latest end so far at each cue */
@@ -2624,14 +2640,23 @@ static int sub_is_arabic(void) { const char *l = ""; /* the subtitles on are Ara
   if (!strncmp(P.curSub, "ext:", 4)) l = P.pick.lang; else if (!strncmp(P.curSub, "emb:", 4)) { int n = atoi(P.curSub + 4); for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == n) l = P.emb[i].lang; }
   return !strncasecmp(l, "ar", 2) && (!l[2] || l[2] == '-' || l[2] == '_' || !strcasecmp(l, "ara") || !strncasecmp(l, "arab", 4)); }
 static int subw(void) { return subfont_w(600); } /* (the subtitles' weight in the viewer's fonts) */
+/* a subtitle line as it is drawn everywhere: a drop shadow down and to the right (Settings > Subtitles > Shadow: Off,
+   Light, Medium, Strong; soft, a few passes fading out), the outline around the letters, then the letters */
+static const SubStyle *sub_style(void);
+static void sub_glyphs(const char *s, float x, float y, int px, uint32_t col, uint32_t ol, int align) {
+  int sh = sub_style()->sh;
+  if (sh > 0) { static const float D[4] = { 0, 2.0f, 3.5f, 5.0f }; static const int A[4] = { 0, 110, 150, 190 }; float d = D[sh] * px / 38.0f; int a = (int)(A[sh] * (col >> 24) / 255);
+    for (int k = 2; k >= 0; k--) { float o = d + k * 0.8f; text_draw(s, x + o, y + o, px, subw(), BLACK_A(k ? a / (2 + k) : a), 0, 0, align); } }
+  for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(s, x + ox[d], y + oy[d], px, subw(), ol, 0, 0, align); }
+  text_draw(s, x, y, px, subw(), col, 0, 0, align);
+}
 static void draw_mkv_line(const MkvLine *l, float bx, float by, int px, uint32_t col, uint32_t ol, float bo, int align) {
-  float lh = px * 1.35f; char buf[1024]; snprintf(buf, sizeof buf, "%s", l->t); char *lp[12]; int n = 0; for (char *c = strtok(buf, "\n"); c && n < 12; c = strtok(NULL, "\n")) lp[n++] = c;
+  float lh = px * 1.35f; char buf[1024]; snprintf(buf, sizeof buf, "%s", l->t); if (sub_marks_on) sub_marks_clean(buf); char *lp[12]; int n = 0; for (char *c = strtok(buf, "\n"); c && n < 12; c = strtok(NULL, "\n")) lp[n++] = c;
   int an = l->an ? l->an : 2; float y = an >= 7 ? by : an >= 4 ? by - n * lh / 2 : by - n * lh; /* numpad: 7-9 hang from the point, 1-3 stand on it */
   if (l->color) col = 0xff000000u | (l->color & 0xffffff); /* a sign keeps its own colour */
   for (int i = 0; i < n; i++) { float tw = text_width(lp[i], px, subw(), 0), x0 = align == ALIGN_CENTER ? bx - tw / 2 : align == ALIGN_RIGHT ? bx - tw : bx;
-    if (bo > 0) gfx_rrect(x0 - 16, y - 2, tw + 32, lh + 4, 8, BLACK_A((int)(bo * 255)));
-    for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(lp[i], bx + ox[d], y + oy[d] + (lh - text_line_height(px)) / 2, px, subw(), ol, 0, 0, align); }
-    text_draw(lp[i], bx, y + (lh - text_line_height(px)) / 2, px, subw(), col, 0, 0, align); y += lh; }
+    if (bo > 0) { float t0 = i == 0 ? 2 : 0, b0 = i == n - 1 ? 2 : 0; gfx_rrect(x0 - 16, y - t0, tw + 32, lh + t0 + b0, n > 1 ? 0 : 8, BLACK_A((int)(bo * 255))); }
+    sub_glyphs(lp[i], bx, y + (lh - text_line_height(px)) / 2, px, col, ol, align); y += lh; }
 }
 static int subDrew; /* draw_subs put a line on screen this frame */
 static void draw_subs_lines(void) {
@@ -2671,8 +2696,7 @@ static void draw_subs_lines(void) {
   float y = SB_H - bottom - lines * lh;
   if (bo > 0) { float mw = SC.mw; gfx_rrect(SB_W / 2 - mw / 2 - 16, y - 2, mw + 32, lines * lh + 4, 8, BLACK_A((int)(bo * 255))); } /* one box around the lines, as the page's span */
   for (int i = 0; i < lines; i++) {
-    for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(lp[i], SB_W / 2 + ox[d], y + oy[d] + (lh - text_line_height(px)) / 2, px, subw(), ol, 0, 0, ALIGN_CENTER); }
-    text_draw(lp[i], SB_W / 2, y + (lh - text_line_height(px)) / 2, px, subw(), col, 0, 0, ALIGN_CENTER); y += lh; }
+    sub_glyphs(lp[i], SB_W / 2, y + (lh - text_line_height(px)) / 2, px, col, ol, ALIGN_CENTER); y += lh; }
 }
 /* while the position is set: a sample line in the viewer's style where the subtitles will sit, when none shows */
 static void draw_subs_(void);
@@ -2686,8 +2710,7 @@ static void draw_subs_(void) {
   const SubStyle *st = sub_style(); int px = st->px; float lh = px * 1.35f, y = SB_H - P.subB.v - lh; const char *t = P.styK == 6 || sub_is_arabic() ? "\xd8\xb3\xd8\xaa\xd8\xb8\xd9\x87\xd8\xb1\x20\xd8\xa7\xd9\x84\xd8\xaa\xd8\xb1\xd8\xac\xd9\x85\xd8\xa9\x20\xd9\x87\xd9\x86\xd8\xa7" : T("Subtitles appear here"); /* (Arabic subtitles, or their font being set: the sample in Arabic) */ float tw = text_width(t, px, subw(), 0);
   gfx_opacity_push(a * 0.9f);
   if (st->bo > 0) gfx_rrect(SB_W / 2 - tw / 2 - 16, y - 2, tw + 32, lh + 4, 8, BLACK_A((int)(st->bo * 255)));
-  for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(t, SB_W / 2 + ox[d], y + oy[d] + (lh - text_line_height(px)) / 2, px, subw(), st->ol, 0, 0, ALIGN_CENTER); }
-  text_draw(t, SB_W / 2, y + (lh - text_line_height(px)) / 2, px, subw(), st->col, 0, 0, ALIGN_CENTER);
+  sub_glyphs(t, SB_W / 2, y + (lh - text_line_height(px)) / 2, px, st->col, st->ol, ALIGN_CENTER);
   gfx_opacity_pop();
 }
 /* seek previews on the TV (core/seekprev): a scrub with the remote shows the picture at its time over the seek pill,

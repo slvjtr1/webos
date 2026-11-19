@@ -66,6 +66,11 @@ static const Opt LANG_OPTS[] = { { "", "Off" }, { "eng", "English" }, { "ara", "
 static const Opt SKIPO[] = { { "auto", "Auto" }, { "show", "Show" }, { "off", "Off" } }; /* the intro / recap button: skips by itself, waits for OK, or none */
 static const Opt CLOCKO[] = { { "24", "24-hour (15:30)" }, { "12", "12-hour (3:30 PM)" } };
 static const Opt SEEK[] = { { "5", "5s" }, { "10", "10s" }, { "15", "15s" }, { "20", "20s" }, { "30", "30s" } };
+static const Opt CLEANO[] = { { "false", "Off" }, { "true", "Clean" }, { "super", "Super clean" } };
+static const Opt SHADOWO[] = { { "off", "Off" }, { "light", "Light" }, { "medium", "Medium" }, { "strong", "Strong" } };
+static const Opt UPO[] = { { "off", "Off" }, { "D", "D" }, { "C", "C" }, { "B", "B" }, { "A", "A" } }; /* D the lightest, A the strongest */
+static const Opt DTSOUT[] = { { "auto", "Auto" }, { "surround", "Surround 5.1" }, { "stereo", "Stereo" } };
+static const Opt SOUNDT[] = { { "auto", "Auto" }, { "off", "Off" } };
 static const Opt DTSM[] = { { "auto", "Auto" }, { "convert", "Convert" }, { "off", "Off" } }; /* DTS sound: found out by playing, always converted, or left to the TV */
 static const Opt ASPECT[] = { { "fit", "Original" }, { "fill", "Fill the screen" }, { "zoom", "Zoom" } };
 static const Opt SIZES[] = { { "0", "72%" }, { "1", "80%" }, { "2", "100%" }, { "3", "120%" }, { "4", "140%" }, { "5", "160%" }, { "6", "180%" } };
@@ -76,9 +81,9 @@ static const Opt BGS[] = { { "0", "None" }, { "1", "Solid" }, { ".6", "Transpare
 static const Opt ASSO[] = { { "styled", "Styled" }, { "plain", "Plain" } };
 static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" }, { "5", "5 min" }, { "10", "10 min" } };
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
-#define NCAT 11
+#define NCAT 12
 #define MAXROWS 48
-static Setting playBase[14], playS[10], seekS[6], subsS[11], audS[4], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[10];
+static Setting playBase[17], playS[13], seekS[6], subsS[13], audS[7], picS[2], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[12];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -186,6 +191,7 @@ static int about_opts(void) {
   /* the rows say what they do and no more: only the support row has words under it (an install says how it goes, while it goes) */
   if (av) { Setting *s = &supS[n++]; set_act(s, "__upd", st == UPD_INSTALLING ? T1("Installing version {v}…", "v", av) : T1("Install version {v}", "v", av), update_msg()); s->raw = 1; }
   { Setting *s = &supS[n++]; set_act(s, "__check", T("Check for updates"), ""); s->raw = 1; } /* (its answer comes as a toast) */
+  set_s(&supS[n++], "betaUpdates", "Beta updates", "Early versions before they are released. They may still have problems", OO, 2, "false");
   set_act(&supS[n++], "__logs", "Share logs", "");
   if (welcome_support_url()[0]) set_act(&supS[n++], "__support", "Support the project / Request a feature", "Your support keeps it going, and feature requests are welcome there. A star helps others find it"); /* its codes in view (sized as if last) */
   set_s(&supS[n++], "nerdStats", "Stats for nerds", "", OO, 2, "false"); /* under it: the list scrolls to it */
@@ -200,7 +206,7 @@ static unsigned usbSeen;
 static void set_count(const Setting *opts, int n) { for (int i = 0; i < ncat; i++) if (cats[i].opts == opts) { cats[i].n = n; if (S.cat == i && S.idx >= n) S.idx = n > 0 ? n - 1 : 0; } }
 static void play_layout(void) {
   int on = strcmp(store_get("bgTrailer", "true"), "false") != 0, n = 0;
-  playS[n++] = playBase[4]; playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
+  playS[n++] = playBase[4]; playS[n++] = playBase[15]; playS[n++] = playBase[14]; playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
   playS[n++] = playBase[13]; /* torrents: how they connect, then their USB cache, last */
   iUsb = n; playS[n++] = playBase[5]; /* the USB cache, last */
   set_count(playS, n);
@@ -228,11 +234,13 @@ static void build(void) {
   set_s(&playBase[9], "showChapters", "Chapters", "", OO, 2, "true");
   prev_available(); /* (its library looked at in the background now, so the row is there when Settings opens) */
   set_s(&playBase[10], "seekPreviews", "Previews on the seek bar", "Pictures from the film over the bar as you move through it. Off: none are made", OO, 2, "true"); /* the file's chapters on the seek bar and in the seek pill */
-  set_s(&playBase[11], "seekPreviewsWait", "Load previews before playing", "The film starts once this much of it has its previews; OK starts it at once", PWO, 7, "80"); playBase[11].sub = 1;
+  set_s(&playBase[11], "seekPreviewsWait", "Load previews before playing", "The film starts once this much of it has its previews; OK starts it at once", PWO, 7, "false"); playBase[11].sub = 1;
   set_s(&playBase[8], "skipIntro", "Skip intro and recap", "Auto skips by itself after a moment; Show waits for OK; Off shows nothing", SKIPO, 3, "auto");
   set_s(&playBase[2], "aspectMode", "Picture size", "Original, fill the screen or zoom", ASPECT, 3, "fit");
   set_s(&playBase[3], "bgTrailer", "Background trailers", "A trailer plays behind Home after a few seconds", OO, 2, "true");
   set_s(&playBase[4], "autoBest", "Play the best stream automatically", "", OO, 2, "false");
+  set_s(&playBase[15], "bestDebrid", "I use debrid", "The biggest, highest-quality files are picked freely: remuxes and high bitrates, not held to the speed test", OO, 2, "false"); playBase[15].sub = 1;
+  set_s(&playBase[14], "cleanSources", "Clean sources", "Clean: no fake files, no other episodes. Super clean: also no other title of a similar name, and no cinema recordings when real copies exist", CLEANO, 3, "super");
   set_s(&playBase[7], "dv7Convert", "Dolby Vision for Blu-ray copies", "Their picture is converted on this TV so it shows in Dolby Vision, not HDR10", OO, 2, "true");
   set_s(&playBase[6], "bgTrailerVol", "Volume", "The sound comes up softly to this level", SVOL, 10, "70"); playBase[6].sub = 1; /* (shown right under the trailers while they are on: play_layout; drawn as theirs, set in) */
   usb_row();
@@ -250,6 +258,8 @@ static void build(void) {
     if (!store_get("subsPosPct", "")[0]) { static const int OLD[6] = { 3, 8, 13, 18, 23, 28 }; int i = atoi(store_get("subsPosition", "1")); char b[8]; snprintf(b, sizeof b, "%d", OLD[i < 0 || i > 5 ? 1 : i]); store_set("subsPosPct", b); }
     set_s(&subsS[9], "subsPosPct", "Position", "How high over the bottom of the picture; also in the player", PP, 29, "8"); }
   { static const Opt BR[] = { { "100", "100%" }, { "80", "80%" }, { "60", "60%" }, { "40", "40%" } }; set_s(&subsS[8], "subsBright", "Brightness", "", BR, 4, "100"); } /* (PR #39: softer on an OLED in the dark; under Background) */
+  set_s(&subsS[11], "subsShadow", "Shadow", "A soft shadow under the letters, down and to the right", SHADOWO, 4, "medium");
+  set_s(&subsS[12], "subsCleanMarks", "Clean subtitle marks", "Takes out ( ) and quotation marks around lines; the words inside and the punctuation stay", OO, 2, "true");
   set_s(&subsS[10], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
   /* the audio language: Original (the film's own track, as it starts) first and by default, then a language, picked by
      itself when a film has it (one row: the old "Auto audio track" switch is folded in: off was Original) */
@@ -257,9 +267,14 @@ static void build(void) {
     if (!store_get("audOrigDone", NULL)) { if (strcmp(store_get("enableDefaultAudioTrack", "false"), "true")) store_set("defaultAudioTrack", "orig"); store_set("audOrigDone", "1"); } /* (once: the switch off was the original track) */
     set_s(&audS[0], "defaultAudioTrack", "Default audio language", "", AUDO, NLANGOPTS, "orig"); }
   set_s(&audS[1], "dtsMode", "DTS sound", "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV", DTSM, 3, "auto");
+  set_s(&audS[4], "dtsOut", "Converted sound", "DTS and TrueHD made playable here. Auto: stereo with clear dialogue on the TV\xe2\x80\x99s speakers, 5.1 for a soundbar or receiver", DTSOUT, 3, "auto");
+  set_s(&audS[5], "soundTune", "Sound for this TV", "Auto: set for where the sound goes while a title plays (the TV\xe2\x80\x99s speakers or a soundbar), put back after", SOUNDT, 2, "auto");
+  set_s(&audS[6], "voiceClear", "Clear voice", "The TV\xe2\x80\x99s dialogue enhancer on its speakers while a title plays", OO, 2, "true"); audS[6].sub = 1;
   set_s(&audS[2], "uiSound", "Interface sounds", "A soft click as you move between titles", OO, 2, "true");
   { int v = atoi(store_get("uiSoundVol", "10")); if (v > 40) store_set("uiSoundVol", "40"); else if (v % 5 || v < 5) { char b[8]; snprintf(b, sizeof b, "%d", v < 5 ? 5 : (v + 2) / 5 * 5); store_set("uiSoundVol", b); } } /* (a level from before, or a phone's: the nearest one here, 40 at most) */
   set_s(&audS[3], "uiSoundVol", "Interface sound level", "Of the TV\xe2\x80\x99s volume", UIVOL, 8, "10");
+  set_s(&picS[0], "animeEnhance", "Anime upscale", "The TV\xe2\x80\x99s own picture processors set for drawn pictures while anime plays: D the lightest, A the strongest. Costs the app nothing", UPO, 5, "B");
+  set_s(&picS[1], "filmEnhance", "Film upscale", "The same for films and series: more detail from the TV\xe2\x80\x99s Super Resolution and sharpness. D the lightest, A the strongest", UPO, 5, "off");
   set_s(&lookS[0], "accent", "Accent colour", "Dynamic: the colours of the title you open", ACCENT_OPTS, 20, "logo"); /* first, right under its picture */
   set_s(&lookS[2], "clockFormat", "Clock", "24-hour or 12-hour time, everywhere the app shows it", CLOCKO, 2, "24");
   set_s(&lookS[3], "spoilers", "Spoilers", "", SPOILO, 3, "off"); /* the episodes not watched yet: their stills blurred, and their descriptions too if asked */
@@ -278,14 +293,15 @@ static void build(void) {
   Cat c[NCAT] = {
     { "Watch", "Playback", "set_play", "Best stream, next episode, picture size", NULL, playS, 6, 0 }, /* (the counts: play_layout) */
     { "Watch", "Seek bar", "set_seek", "Seek step, chapters, previews", NULL, seekS, 4, 0 },
-    { "Watch", "Subtitles", "set_subs", "Language, size, font, colour", "subs", subsS, 11, 0 },
-    { "Watch", "Audio", "set_aud", "Default audio language, DTS, interface sounds", NULL, audS, 4, 0 },
+    { "Watch", "Subtitles", "set_subs", "Language, size, font, colour, shadow", "subs", subsS, 13, 0 },
+    { "Watch", "Audio", "set_aud", "Default audio language, DTS, sound for this TV", NULL, audS, 7, 0 },
+    { "Watch", "Picture", "p_asp", "Anime upscale, film upscale", NULL, picS, 2, 0 },
     { "Screens", "Appearance", "set_look", "Accent colour, screensaver, clock, trailers", "look", lookS, 6, 0 },
     { "Screens", "Language", "set_lang", "The language of the app", NULL, langS, nl, 0 },
     { "Account and system", "Addons", "set_addon", "", NULL, addonS, na, 0 },
     { "Account and system", "Trakt", "set_trakt", "Track what you watch", "trakt", traktS, 1, 0 },
     { "Account and system", "Keys", "set_keys", "Titles in your language, ratings and reviews", "keys", keyS, nk, 0 },
-    { "Account and system", "About", "info", "Version, updates, logs and support", "about", supS, nab, 0 },
+    { "Account and system", "About", "info", "Version, updates, beta and logs", "about", supS, nab, 0 },
     { "", "Log out", "set_out", "", "acct", acctS, 0, 1 } }; /* (no row of its own: the category itself is the button, the page shows who is signed in) */
   ncat = 0; for (int i = 0; i < NCAT; i++) if (c[i].opts != keyS || nk) cats[ncat++] = c[i];
   play_layout(); S.dirty = 1;

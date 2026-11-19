@@ -406,6 +406,7 @@ static void adopt(void) {
   render();
 }
 static void on_meta(cJSON *m, void *ud) {
+  if (m && (unsigned)(uintptr_t)ud == D.gen) sb_src_know(D.p.it.type, ID()); /* Super clean: ready before the streams are asked */
   if ((unsigned)(uintptr_t)ud != D.gen || SCR != SCR_DETAIL) return;
   if (!m) { if (D.meta || D.pend) return;
     /* no addon describes it (live channels and sports, many catalogs without a meta resource): the page shows what the

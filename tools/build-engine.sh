@@ -8,6 +8,8 @@
 # 24 MB and can change while playing, libtorrent settings by name, payload deleted with its torrent). No OpenSSL: peer encryption works,
 # HTTPS trackers do not. Sources and build folders live in $ORIGIN_BUILD/engine.
 set -euo pipefail
+WMAP=""; if command -v cygpath >/dev/null 2>&1; then WMAP=" -ffile-prefix-map=$(cygpath -m "$HOME")=/src -ffile-prefix-map=$(cygpath -m "$(cd "$(dirname "$0")/.." && pwd)")=/app"; fi   # (Windows: the compiler sees C:/... paths)
+SCRUB() { local py; for py in python python3; do "$py" -c 1 >/dev/null 2>&1 && break; done; "$py" "$(dirname "$0")/scrub_paths.py" "$1" "$HOME" "$(command -v cygpath >/dev/null 2>&1 && cygpath -m "$HOME")"; }   # whatever path still came through (headers outside the maps)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ORIGIN_BUILD="${ORIGIN_BUILD:-$HOME/origin-build}"   # the private build folder outside the repo: toolchain, SDK, sources, keys
 TARGET="${1:-webos}"
@@ -21,7 +23,7 @@ git -C "$SRC" apply --whitespace=nowarn "$ROOT/tools/engine/engine.patch"
 DEPS="${ENGINE_DEPS:-$W/deps}"; mkdir -p "$DEPS"
 if [ ! -f "$DEPS/nuvio_boost-src/boost/version.hpp" ]; then
   curl -fsSL -o "$DEPS/boost.tar.bz2" https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2
-  echo "1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b  $DEPS/boost.tar.bz2" | shasum -a 256 -c -
+  echo "1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b  $DEPS/boost.tar.bz2" | { command -v shasum >/dev/null && shasum -a 256 -c - || sha256sum -c -; }
   rm -rf "$DEPS/nuvio_boost-src"; mkdir -p "$DEPS/nuvio_boost-src"; tar -xjf "$DEPS/boost.tar.bz2" -C "$DEPS/nuvio_boost-src" --strip-components 1; rm -f "$DEPS/boost.tar.bz2"
 fi
 if [ ! -d "$DEPS/nuvio_libtorrent-src/.git" ]; then
@@ -38,13 +40,23 @@ TC="$W/tc-$TARGET"; mkdir -p "$TC"
 printf '#!/bin/sh\nexec "%s" cc %s "$@"\n' "$ZIG" "$ZT" > "$TC/cc"; printf '#!/bin/sh\nexec "%s" c++ %s "$@"\n' "$ZIG" "$ZT" > "$TC/c++"
 printf '#!/bin/sh\nexec "%s" ar "$@"\n' "$ZIG" > "$TC/ar"; printf '#!/bin/sh\nexec "%s" ranlib "$@"\n' "$ZIG" > "$TC/ranlib"
 chmod 755 "$TC/cc" "$TC/c++" "$TC/ar" "$TC/ranlib"
+TCX="$TC"; X=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)   # Windows (Git Bash): CMake runs no shell scripts, so .cmd wrappers for it
+  ZW="$(cygpath -m "$ZIG")"; TCX="$(cygpath -m "$TC")"; X=.cmd
+  printf '@"%s" cc %s %%*
+' "$ZW" "$ZT" > "$TC/cc.cmd"; printf '@"%s" c++ %s %%*
+' "$ZW" "$ZT" > "$TC/c++.cmd"
+  printf '@"%s" ar %%*
+' "$ZW" > "$TC/ar.cmd"; printf '@"%s" ranlib %%*
+' "$ZW" > "$TC/ranlib.cmd" ;;
+esac
 cat > "$TC/toolchain.cmake" <<T
 set(CMAKE_SYSTEM_NAME $SYS)
 set(CMAKE_SYSTEM_PROCESSOR $PROC)
-set(CMAKE_C_COMPILER $TC/cc)
-set(CMAKE_CXX_COMPILER $TC/c++)
-set(CMAKE_AR $TC/ar)
-set(CMAKE_RANLIB $TC/ranlib)
+set(CMAKE_C_COMPILER $TCX/cc$X)
+set(CMAKE_CXX_COMPILER $TCX/c++$X)
+set(CMAKE_AR $TCX/ar$X)
+set(CMAKE_RANLIB $TCX/ranlib$X)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
@@ -53,7 +65,7 @@ T
 B="$W/build-$TARGET"
 SSL=(-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON); SSLLIB=()
 if [ "$TARGET" = mac ]; then OSSL="$(brew --prefix openssl@3)"; SSL=(-DOPENSSL_ROOT_DIR="$OSSL"); SSLLIB=("$OSSL/lib/libssl.a" "$OSSL/lib/libcrypto.a"); export PKG_CONFIG_PATH="$OSSL/lib/pkgconfig"; fi   # the engine needs it on macOS (system trust store)
-FL="-ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -D_LARGEFILE64_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -ffile-prefix-map=$W=/engine -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app -ffile-prefix-map=$W=/engine"   # no local paths in the library (source names in asserts)
+FL="-ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -D_LARGEFILE64_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app$WMAP"   # no local paths in the library (source names in asserts)
 if [ "$TARGET" = mac ]; then mkdir -p "$W/ossl3"; ln -sfn "$OSSL/include/openssl" "$W/ossl3/openssl"; FL="$FL -I$W/ossl3"; fi   # OpenSSL 3 ahead of the compiler's own /opt/homebrew/include (OpenSSL 4 there does not build the pinned libtorrent; the same folder given twice is dropped, hence the link)
 [ "$TARGET" = mac ] && [ -n "${ENGINE_MAC_PREBUILT:-}" ] || cmake -S "$SRC" -B "$B" -G Ninja -DNUVIO_ENGINE_ENABLE_LIBTORRENT=ON -DNUVIO_ENGINE_BUILD_TESTS=OFF \
   -DFETCHCONTENT_SOURCE_DIR_NUVIO_BOOST="$DEPS/nuvio_boost-src" -DFETCHCONTENT_SOURCE_DIR_NUVIO_LIBTORRENT="$DEPS/nuvio_libtorrent-src" \
@@ -74,4 +86,4 @@ else
     "$B/libnuvio_engine.a" "$LT" "${SSLLIB[@]}" -framework Security -framework CoreFoundation -framework SystemConfiguration \
     -Wl,-dead_strip -o "$OUT"
 fi
-ls -l "$OUT"
+SCRUB "$OUT"; ls -l "$OUT"

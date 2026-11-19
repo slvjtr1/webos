@@ -29,6 +29,7 @@ void best_speed_run(void (*cb)(int ok, double mbps, void *ud), void *ud);
 void best_speed_cancel(void);          /* stops the downloads; cb is not called */
 
 int  best_on(void);                    /* the setting */
+int  best_debrid(void);                /* Settings > Playback > I use debrid: big, high-bitrate direct files picked freely */
 
 /* ---- the score (pure: no state, unit-testable) ---- */
 typedef struct { const Stream *s; double sc, need, cap; int mute, nodec; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it (converted: a soft preference); nodec: its picture won't decode here (AV1 without the decoder): left out while anything else can play */

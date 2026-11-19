@@ -240,8 +240,10 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
     if ((has_word(l, "hi10") || has_word(l, "hi10p") || (ten && avc)) && !hevc) return 0; } /* 10-bit H.264 (Hi10P, common in anime): no TV's decoder takes it, the player only fails */
   sc += lang_score(t, l); /* the user's languages (settings) */
   double mb = size_mb(t), need = mb ? mb * 8 / (dur * 60) : by_res(rr, 22, 12, 8, 4, 2);
-  if (mb) sc += fmin(18, need / by_res(rr, 20, 10, 6, 3, 1.5) * 8); /* more bitrate for the same picture: better */
-  double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 0.8 : 4) : line; /* a swarm gives roughly 0.8 Mbps a seed (1.5 promised too much: an anime swarm far away, a few seeds, crawled) */
+  if (mb) sc += fmin(best_debrid() && !p2p ? 60 : 18, need / by_res(rr, 20, 10, 6, 3, 1.5) * 8); /* more bitrate for the same picture: better (a debrid user: up to the full remux) */
+  if (best_debrid() && !p2p && strstr(l, "remux")) sc += 20;
+  double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 0.8 : 4) : line;
+  if (best_debrid() && !p2p) cap = fmax(cap * 2.5, 160); /* debrid: its servers outrun the speed test; only a file far past the line is held back */ /* a swarm gives roughly 0.8 Mbps a seed (1.5 promised too much: an anime swarm far away, a few seeds, crawled) */
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
   if (!o) return 1;
   o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->nodec = nodec; if (resOut) *resOut = r;
@@ -338,10 +340,12 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
 }
 
 #ifdef SB_BEST_PURE
+int best_debrid(void) { return 0; }
 int best_dts_mode(void) { return 0; } /* the scoring test: Auto, as the web app scores */
 #endif
 #ifndef SB_BEST_PURE
 int best_on(void) { return !strcmp(store_get("autoBest", "false"), "true"); }
+int best_debrid(void) { return !strcmp(store_get("bestDebrid", "false"), "true"); }
 int best_dur(const cJSON *meta, const char *type) {
   const cJSON *rt = meta ? cJSON_GetObjectItemCaseSensitive(meta, "runtime") : NULL; char b[64] = "";
   if (cJSON_IsString(rt) && rt->valuestring) snprintf(b, sizeof b, "%s", rt->valuestring); else if (cJSON_IsNumber(rt)) snprintf(b, sizeof b, "%g", rt->valuedouble);
@@ -515,13 +519,13 @@ static void speed_landed(int ok, double mbps) {
 
 /* ---- choosing for Play ------------------------------------------------------------------------------- */
 /* The player's title art comes up at once and stays while the addons answer. All answered: chosen at once; some
-   still answering: up to 10 s for them all (most answer in 1-3 s), then the best of what came; with nothing usable
+   still answering: from 4 s a direct file at the TV's own picture is taken, at 7 s the best of what came; with nothing usable
    by then, the first usable one that comes, up to 30 s. One quiet line says what it waits for. */
 static unsigned long long skipped[24]; static int nSkipped;
 static unsigned long long url_hash(const char *u) { unsigned long long h = 1469598103934665603ull; for (; *u; u++) { h ^= (unsigned char)*u; h *= 1099511628211ull; } return h; }
 void best_skip(const char *url) { if (url && *url) skipped[nSkipped++ % 24] = url_hash(url); }
 static int was_skipped(const Stream *s) { unsigned long long h = url_hash(s->url); for (int i = 0; i < nSkipped && i < 24; i++) if (skipped[i] == h) return 1; return 0; }
-static struct { unsigned tok; int on, done, fin, wait, said3, t12, t30, dur; double t0; char type[16], vid[SB_VID]; Stream *all; int n, cap; BestStatusCb status; BestDoneCb cb; void *ud; } F;
+static struct { unsigned tok; int on, done, fin, wait, said3, t4, t12, t30, dur; double t0; char type[16], vid[SB_VID]; Stream *all; int n, cap; BestStatusCb status; BestDoneCb cb; void *ud; } F;
 static void flow_end(void) { F.on = 0; free(F.all); F.all = NULL; F.n = F.cap = 0; }
 static void say(void) {
   if (!F.on || F.fin || !F.status) return; int slow = F.wait > 0 && app_now() - F.t0 > 2.8; char t[256], n[16]; /* only when it takes a while: some addons are slow */
@@ -533,9 +537,11 @@ static void say(void) {
 static void decide(int force) {
   if (!F.on || F.fin) return;
   double el = app_now() - F.t0;
-  if (!F.done && !force && el < 10) return;
+  if (!F.done && !force && el < 4) return;
   const Stream **l = F.n ? malloc(F.n * sizeof *l) : NULL; int nl = 0; for (int i = 0; i < F.n; i++) if (!was_skipped(&F.all[i])) l[nl++] = &F.all[i]; /* never one that just failed */
   BestRate r; const Stream *b = best_pick(l, nl, F.dur, NULL, -1, &r); free(l);
+  if (b && !F.done && !force && el < 7) { const TvCaps *c = best_caps(); int mx = c && c->maxRes ? c->maxRes : 1080; char inf[2048]; best_stream_info(b, inf, sizeof inf);
+    int rs = res_n(best_res_of(inf)); if (b->p2p || rs < (mx > 1080 && best_net_mbps() > 0 && best_net_mbps() < 30 ? 1080 : mx)) return; } /* (early: only a direct file at the TV's own picture; else the slow addons may still bring one) */
   if (!b) { if (!F.done && el < 30) return; F.fin = 1; BestDoneCb cb = F.cb; void *ud = F.ud; fprintf(stderr, "[best] nothing suits this TV (%d streams)\n", F.n); flow_end(); if (cb) cb(NULL, NULL, ud); return; }
   F.fin = 1; char info[2048]; best_stream_info(b, info, sizeof info); if (strlen(info) > 160) info[160] = 0; fprintf(stderr, "[best] %s | %s\n", r.sum, info);
   if (F.status) F.status(r.sum, F.ud);
@@ -571,7 +577,8 @@ void best_tick(void) {
   if (sr) speed_landed(sok, mb);
   if (F.on) { double el = app_now() - F.t0;
     if (!F.said3 && el >= 3) { F.said3 = 1; say(); }
-    if (F.on && !F.t12 && el >= 10.1) { F.t12 = 1; decide(0); }
+    if (F.on && !F.t4 && el >= 4.1) { F.t4 = 1; decide(0); }
+    if (F.on && !F.t12 && el >= 7.1) { F.t12 = 1; decide(0); }
     if (F.on && !F.t30 && el >= 30.1) { F.t30 = 1; decide(1); } }
 }
 #endif

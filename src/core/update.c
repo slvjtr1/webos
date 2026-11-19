@@ -29,7 +29,7 @@
 
 #define UPD_GH "https://api.github.com/repos/slvjtr1/webos/releases?per_page=8"
 #define UPD_MAN "https://origin-webos.vercel.app/api/apps/" SB_APP_ID "/manifest.json"
-typedef struct { char ver[24], url[512], sha[72]; char notes[5][256]; int nnotes; } Rel;
+typedef struct { char ver[24], url[512], sha[72]; char notes[5][256]; int nnotes, beta; } Rel; /* beta: a GitHub pre-release (Settings > About > Beta updates) */
 static struct {
   char cur[24], appinfo[1200]; int read; Rel avail; int has, state; char msg[240]; unsigned serial;
   int pill, pf; double hideAt, openAt; Tween pa, slide, dot; unsigned long job; int started;
@@ -37,6 +37,8 @@ static struct {
   int kind; struct { char lb[128], badge[48]; void (*ok)(void); int pend; } n; /* kind 1: the other notice's capsule */
 } U;
 static void changed(void) { U.serial++; }
+int update_beta(void) { return !strcmp(store_get("betaUpdates", "false"), "true"); }
+int update_avail_beta(void) { return U.has && U.avail.beta; }
 static int ver_cmp(const char *a, const char *b);
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); return t.tv_sec * 1000.0 + t.tv_nsec / 1e6; }
 
@@ -108,7 +110,7 @@ static void done(const Rel *best, int manual) {
   char at[32]; snprintf(at, sizeof at, "%.0f", now_ms()); store_set("updAt", at);
   if (best && U.cur[0] && ver_cmp(best->ver, U.cur) > 0) {
     U.avail = *best; U.has = 1; U.state = UPD_AVAIL; store_set("updVer", best->ver);
-    fprintf(stderr, "[update] %s available (running %s)\n", best->ver, U.cur);
+    fprintf(stderr, "[update] %s%s available (running %s)\n", best->ver, best->beta ? " (beta)" : "", U.cur);
     if (!manual) { if (player_open()) pillPend = 1; else pill_show(); } /* (never over a film: after it) */
   } else {
     int none = best || reached;
@@ -141,7 +143,8 @@ static void on_releases(int st, const unsigned char *body, size_t len, void *ud)
   const char *pre = SB_APP_ID "_"; size_t pl = strlen(pre);
   cJSON *arr = cJSON_IsArray(list) ? list : NULL; reached = arr != NULL;
   cJSON_ArrayForEach(r, arr) {
-    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "draft")) || cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "prerelease"))) continue;
+    int isPre = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "prerelease"));
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "draft")) || (isPre && !update_beta())) continue;
     cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(r, "assets")) {
       cJSON *nm = cJSON_GetObjectItemCaseSensitive(a, "name"), *dg = cJSON_GetObjectItemCaseSensitive(a, "digest"), *du = cJSON_GetObjectItemCaseSensitive(a, "browser_download_url");
       if (!cJSON_IsString(nm) || !cJSON_IsString(dg) || !cJSON_IsString(du)) continue;
@@ -151,7 +154,7 @@ static void on_releases(int st, const unsigned char *body, size_t len, void *ud)
       if (strncmp(dg->valuestring, "sha256:", 7) || !is_hex64(dg->valuestring + 7)) continue;
       char ver[24]; snprintf(ver, sizeof ver, "%.*s", used, n + pl);
       if (has && ver_cmp(ver, best.ver) <= 0) continue;
-      memset(&best, 0, sizeof best); has = 1; snprintf(best.ver, sizeof best.ver, "%s", ver); snprintf(best.url, sizeof best.url, "%s", du->valuestring); snprintf(best.sha, sizeof best.sha, "%s", dg->valuestring + 7);
+      memset(&best, 0, sizeof best); has = 1; best.beta = isPre; snprintf(best.ver, sizeof best.ver, "%s", ver); snprintf(best.url, sizeof best.url, "%s", du->valuestring); snprintf(best.sha, sizeof best.sha, "%s", dg->valuestring + 7);
       cJSON *b = cJSON_GetObjectItemCaseSensitive(r, "body"); best.nnotes = notes_from(cJSON_IsString(b) ? b->valuestring : NULL, best.notes);
     }
   }
@@ -169,6 +172,8 @@ void update_check(int manual) {
 
 /* ---- install ---- */
 static char waitPath[1200], shPath[1200];
+static int retries; static double retryAt; static int rooted = -1; /* the Channel runs commands as root here (1), not (0), not known (-1) */
+static void install_go(void);
 static void relaunch_cancel(void) { if (waitPath[0]) unlink(waitPath); if (shPath[0]) unlink(shPath); }
 /* the Channel runs this as root, apart from the app: once appinfo.json shows the new version (at most 5 min), the app opens again */
 static void relaunch_arm(void) {
@@ -187,6 +192,7 @@ static void relaunch_arm(void) {
   char cmd[1400]; snprintf(cmd, sizeof cmd, "setsid sh '%s' >/dev/null 2>&1 </dev/null &", sh);
   cJSON *p = cJSON_CreateObject(); cJSON_AddStringToObject(p, "command", cmd); char *ps = cJSON_PrintUnformatted(p); cJSON_Delete(p);
   char *r = plat_luna_call("luna://org.webosbrew.hbchannel.service/exec", ps, 3000); free(ps);
+  { cJSON *a = r ? cJSON_Parse(r) : NULL; rooted = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "returnValue")) ? 1 : 0; cJSON_Delete(a); } /* (the Channel without root refuses exec: the app is not opened again by itself) */
   fprintf(stderr, "[update] relaunch waiter: %s\n", r ? r : "(no answer)"); free(r);
 }
 static void on_install(const char *payload, void *ud) {
@@ -200,12 +206,14 @@ static void on_install(const char *payload, void *ud) {
     int ask = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "permission")); /* (Android TV: the system's leave to install is still to be given; its page is open: not a failure) */
     U.state = UPD_AVAIL; snprintf(U.msg, sizeof U.msg, "%s", ask ? e : noChannel ? T("Install it from the Homebrew Channel") : T1("The update failed: {e}", "e", e));
     if (ask) { fprintf(stderr, "[update] waiting for the leave to install apps (the request stays: given, the download starts by itself)\n"); changed(); cJSON_Delete(j); return; }
-    if (U.job) { plat_luna_cancel(U.job); U.job = 0; } relaunch_cancel();
+    if (U.job) { plat_luna_cancel(U.job); U.job = 0; }
+    if (!noChannel && retries < 2) { retries++; retryAt = app_now() + 3 * retries; U.state = UPD_INSTALLING; snprintf(U.msg, sizeof U.msg, "%s", T("Downloading again\xe2\x80\xa6")); fprintf(stderr, "[update] install failed (%s): trying again (%d of 2)\n", e, retries); changed(); cJSON_Delete(j); return; }
+    relaunch_cancel();
     fprintf(stderr, "[update] install failed: %s\n", e); toast(noChannel ? T("Install it from the Homebrew Channel") : T("The update failed"), 2500, NULL);
     changed(); cJSON_Delete(j); return;
   }
   if (cJSON_IsString(st) && st->valuestring) { char pc[16] = ""; if (U.state != UPD_INSTALLING) { U.state = UPD_INSTALLING; fprintf(stderr, "[update] installing %s (the leave given)\n", U.avail.ver); } /* (the download that waited for the leave to install) */ if (cJSON_IsNumber(pg)) snprintf(pc, sizeof pc, " %d%%", (int)(pg->valuedouble + 0.5)); snprintf(U.msg, sizeof U.msg, "%s%s", T(st->valuestring), pc); }
-  if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "finished"))) { snprintf(U.msg, sizeof U.msg, "%s", T("Installed: the app opens again in a moment")); fprintf(stderr, "[update] installed %s\n", U.avail.ver); }
+  if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "finished"))) { snprintf(U.msg, sizeof U.msg, "%s", rooted == 0 ? T("Installed: open the app again") : T("Installed: the app opens again in a moment")); fprintf(stderr, "[update] installed %s\n", U.avail.ver); }
   changed(); cJSON_Delete(j);
 }
 void update_install(void) {
@@ -214,7 +222,10 @@ void update_install(void) {
   if (U.state == UPD_INSTALLING) return;
   U.state = UPD_INSTALLING; snprintf(U.msg, sizeof U.msg, "%s", T("Downloading…")); changed();
   fprintf(stderr, "[update] installing %s\n", U.avail.ver);
-  relaunch_arm();
+  retries = 0; retryAt = 0; relaunch_arm();
+  install_go();
+}
+static void install_go(void) {
   cJSON *p = cJSON_CreateObject(); cJSON_AddStringToObject(p, "ipkUrl", U.avail.url); cJSON_AddStringToObject(p, "ipkHash", U.avail.sha); cJSON_AddStringToObject(p, "id", SB_APP_ID); cJSON_AddTrueToObject(p, "subscribe");
   char *ps = cJSON_PrintUnformatted(p); cJSON_Delete(p);
   U.job = plat_luna_subscribe("luna://org.webosbrew.hbchannel.service/install", ps, on_install, NULL); free(ps);
@@ -312,6 +323,8 @@ void update_tick(float dt) {
   if (!U.started && app_now() > 8 && app_splash_done && !player_open() && app_idle() > 1) { U.started = 1; nextAt = app_now() + 6 * 3600; forceCheck = 1; update_check(0); forceCheck = 0; }
   else if (U.started && nextAt && app_now() >= nextAt && !player_open() && app_idle() > 1 && U.state != UPD_CHECKING && U.state != UPD_INSTALLING) { nextAt = app_now() + 6 * 3600; forceCheck = 1; update_check(0); forceCheck = 0; }
   if (pillPend && !player_open() && !U.pill && U.pa.v <= 0.001f) { pillPend = 0; pill_show(); }
+  if (retryAt && app_now() >= retryAt) { retryAt = 0; if (U.state == UPD_INSTALLING && !U.job) install_go(); } /* (a broken-off download, again) */
+  { static int beta = -1; int b = update_beta(); if (beta >= 0 && b != beta && U.state != UPD_CHECKING && U.state != UPD_INSTALLING) { forceCheck = 1; update_check(0); forceCheck = 0; } beta = b; } /* (Beta updates switched: looked again at once) */
   { static int autoI = -1; if (autoI < 0) autoI = getenv("SB_UPD_AUTOINSTALL") != NULL; /* development: Install pressed 3 s after the notice (the whole update, untouched) */
     if (autoI && U.has && U.state == UPD_AVAIL && U.shown && app_now() - U.shownAt > 3) { autoI = 0; U.openAt = 0; update_install(); } }
 }

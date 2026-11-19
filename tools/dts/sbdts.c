@@ -53,7 +53,7 @@ struct SbdSrc {
   sbd_read rd; void *ud; long long size, pos; volatile int *stop; double readWait; long long readCnt, budget; /* budget: reads allowed (0 = any) */
   AVFormatContext *ic; AVIOContext *io; int vi, ai; AVRational vtb, atb;
   AVBSFContext *bsf; AVCodecContext *dec, *enc; SwrContext *swr; int swrChecked; AVAudioFifo *fifo; AVFrame *fr, *ef, *cv; AVPacket *pk;
-  int outRate;
+  int outRate, stereo; /* stereo: SBD_STEREO */
   double *seg; int nseg; sbd_info info;
   /* the run */
   int next, curVSeg, runSeg; double segEnd;
@@ -219,7 +219,11 @@ static int frame_in(SbdSrc *s, AVFrame *fr) {
     s->grid = at; s->gridOn = 1; }
   if (!s->swrChecked) { s->swrChecked = 1;
     if (fr->format != s->enc->sample_fmt || fr->sample_rate != s->outRate || av_channel_layout_compare(&fr->ch_layout, &s->enc->ch_layout)) {
-      if (swr_alloc_set_opts2(&s->swr, &s->enc->ch_layout, s->enc->sample_fmt, s->outRate, &fr->ch_layout, fr->format, fr->sample_rate, 0, NULL) < 0 || swr_init(s->swr) < 0) return AVERROR(EINVAL); } }
+      if (swr_alloc_set_opts2(&s->swr, &s->enc->ch_layout, s->enc->sample_fmt, s->outRate, &fr->ch_layout, fr->format, fr->sample_rate, 0, NULL) < 0) return AVERROR(EINVAL);
+      /* folded to stereo: the centre (the dialogue) at full level rather than -3 dB, the surrounds a little under it and
+         the bass channel in, so voices stay clear over the music and nothing of the mix is lost on two speakers */
+      if (s->enc->ch_layout.nb_channels == 2 && fr->ch_layout.nb_channels > 2) { av_opt_set_double(s->swr, "center_mix_level", 1.0, 0); av_opt_set_double(s->swr, "surround_mix_level", 0.6, 0); av_opt_set_double(s->swr, "lfe_mix_level", 0.5, 0); }
+      if (swr_init(s->swr) < 0) return AVERROR(EINVAL); } }
   if (!s->swr) return av_audio_fifo_write(s->fifo, (void **)fr->extended_data, fr->nb_samples) < 0 ? AVERROR(ENOMEM) : drain_fifo(s, 0);
   int out = swr_get_out_samples(s->swr, fr->nb_samples); AVFrame *c = s->cv; av_frame_unref(c);
   c->nb_samples = out; c->format = s->enc->sample_fmt; c->sample_rate = s->outRate; av_channel_layout_copy(&c->ch_layout, &s->enc->ch_layout);
@@ -346,7 +350,8 @@ static SbdSrc *sbd_open(sbd_read rd, void *ud, long long size, int audioOrd, int
   const AVCodec *dc = avcodec_find_decoder(A->codecpar->codec_id);
   if (!dc) { snprintf(err, errn, "no decoder for this sound"); goto fail; }
   s->dec = avcodec_alloc_context3(dc); avcodec_parameters_to_context(s->dec, A->codecpar); s->dec->pkt_timebase = s->atb;
-  AVDictionary *o = NULL; int six = A->codecpar->ch_layout.nb_channels >= 6 || A->codecpar->codec_id != AV_CODEC_ID_DTS || !A->codecpar->ch_layout.nb_channels;
+  s->stereo = !!(flags & SBD_STEREO);
+  AVDictionary *o = NULL; int six = !s->stereo && (A->codecpar->ch_layout.nb_channels >= 6 || A->codecpar->codec_id != AV_CODEC_ID_DTS || !A->codecpar->ch_layout.nb_channels);
   if (A->codecpar->codec_id == AV_CODEC_ID_DTS) av_dict_set(&o, "core_only", "1", 0); /* the extension's lossless layers cost most of the CPU and AC3 can't carry them */
   else av_dict_set(&o, "downmix", "5.1(side)", 0);                                    /* TrueHD: its own 5.1 presentation, not the 7.1 / objects one */
   if ((r = avcodec_open2(s->dec, dc, &o)) < 0) { av_dict_free(&o); say(err, errn, "sound decoder", r); goto fail; } av_dict_free(&o);

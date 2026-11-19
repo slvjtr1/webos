@@ -1,13 +1,41 @@
 {
- "version": "1.1.0",
- "items": [
-  {"icon": "wn_av", "title": "Seek previews", "text": "A picture of the film on the seek bar, for debrid and direct links."},
-  {"icon": "wn_subs", "title": "Subtitles your way", "text": "Font, size, colour, background, brightness and position, changed while you watch."},
-  {"icon": "wn_opts", "title": "Tracks per show", "text": "The subtitles and audio you pick stay for the whole show."},
-  {"icon": "wn_new", "title": "Chapters and skips", "text": "Chapters on the seek bar, and Skip intro and recap by itself or on OK."},
-  {"icon": "wn_live", "title": "Live TV", "text": "Channels and sports from your live addons, with Favorites and Recent."},
-  {"icon": "collection", "title": "Film collections", "text": "On the title page and in the Library, and the next film after the credits."},
-  {"icon": "wn_lib", "title": "28 languages", "text": "Greek, Brazilian Portuguese, Romanian and Hungarian among them."},
-  "And much more."
- ]
+  "version": "2.0.0",
+  "items": [
+    {
+      "icon": "wn_av",
+      "title": "Anime and film upscale",
+      "text": "The TV's own picture processors tuned from D to A while you watch. No root needed."
+    },
+    {
+      "icon": "wn_new",
+      "title": "Clean sources",
+      "text": "Fakes, other episodes and other titles left out, checked against the title, season and episode."
+    },
+    {
+      "icon": "wn_opts",
+      "title": "Faster start",
+      "text": "The best stream is picked sooner, and films start without waiting for their previews."
+    },
+    {
+      "icon": "wn_live",
+      "title": "I use debrid",
+      "text": "Remuxes and high bitrates picked freely for debrid users."
+    },
+    {
+      "icon": "wn_subs",
+      "title": "Cleaner subtitles",
+      "text": "A soft drop shadow you can set, and ( ) and quotation marks taken out."
+    },
+    {
+      "icon": "wn_lib",
+      "title": "Sound for this TV",
+      "text": "Clear dialogue on the TV's speakers, the full mix for a soundbar, DTS as stereo or 5.1."
+    },
+    {
+      "icon": "collection",
+      "title": "Beta updates",
+      "text": "Try new versions early from Settings > About. Off by default."
+    },
+    "Faster, lighter and steadier everywhere."
+  ]
 }

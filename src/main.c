@@ -1,4 +1,6 @@
 /* The formatting is rough and I'm not going to bother. Pull requests that fix it are welcome; complaints without one help neither me nor the end user. */
+#include "core/tvtune.h"
+#include "core/memtrim.h"
 #include <stdint.h>
 #include <math.h>
 /* Stremio Origin, native. The window, the GL context, the frame loop; everything else is in
@@ -10,6 +12,7 @@
 #include <string.h>
 #include <locale.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #ifdef SB_MAC
 #include <execinfo.h>
@@ -60,11 +63,18 @@ static void prof_start(void) {
     fprintf(stderr, "[prof] no thread timer, CPU time instead\n"); }
   struct itimerval it = { { 0, 2000 }, { 0, 2000 } }; setitimer(ITIMER_PROF, &it, NULL);
 }
+/* the terminal's copy of a crash: only calls that are safe in a signal handler (a crash inside malloc or printf holds
+   their locks; fopen / fputs here could wait on them for ever) */
+static void crash_put(const char *s) { size_t n = strlen(s); while (n) { ssize_t w = write(2, s, n); if (w <= 0) return; s += w; n -= (size_t)w; } }
+static void crash_hex(unsigned long v) { char d[20]; int k = 0; do { d[k++] = "0123456789abcdef"[v & 15]; v >>= 4; } while (v && k < 20); char o[24]; int n = 0; o[n++] = '0'; o[n++] = 'x'; while (k) o[n++] = d[--k]; o[n] = 0; crash_put(o); }
 static void on_crash(int sig, siginfo_t *si, void *uc) {
-  ucontext_t *u = uc; char b[512]; int n = snprintf(b, sizeof b, "[crash] signal %d addr %p pc %p lr %p sp %p\n", sig, si ? si->si_addr : NULL, (void *)u->uc_mcontext.arm_pc, (void *)u->uc_mcontext.arm_lr, (void *)u->uc_mcontext.arm_sp);
-  if (write(2, b, n) < 0) {}
-  FILE *m = fopen("/proc/self/maps", "r"); if (m) { char l[300]; while (fgets(l, sizeof l, m)) if (strstr(l, "stremioorigin")) fputs(l, stderr); fclose(m); }
-  fflush(stderr); _exit(4);
+  ucontext_t *u = uc; char sn[4] = { (char)('0' + sig / 10 % 10), (char)('0' + sig % 10), 0, 0 };
+  crash_put("[crash] signal "); crash_put(sn); crash_put(" addr "); crash_hex((unsigned long)(si ? si->si_addr : NULL));
+  crash_put(" pc "); crash_hex((unsigned long)u->uc_mcontext.arm_pc); crash_put(" lr "); crash_hex((unsigned long)u->uc_mcontext.arm_lr); crash_put(" sp "); crash_hex((unsigned long)u->uc_mcontext.arm_sp); crash_put("\n");
+  int m = open("/proc/self/maps", O_RDONLY); if (m >= 0) { static char b[4096], l[300]; size_t ll = 0; ssize_t r;
+    while ((r = read(m, b, sizeof b)) > 0) for (ssize_t i = 0; i < r; i++) { if (b[i] != '\n') { if (ll < sizeof l - 2) l[ll++] = b[i]; continue; } l[ll] = 0; if (strstr(l, "stremioorigin")) { l[ll] = '\n'; l[ll + 1] = 0; crash_put(l); } ll = 0; }
+    close(m); }
+  _exit(4);
 }
 #endif
 #include "core/castlink.h"
@@ -204,10 +214,12 @@ static void mem_guard(void) {
         else if (lvl == 1) { img_release_unused(img_budget_mb() / 2); gfx_pool_clear(); }
         else if (film) { img_release_unused(12); gfx_pool_clear(); } /* (back on the page, they come again as they are drawn) */
         { extern void sp_mem_level(int); sp_mem_level(lvl); } /* the seek previews' decoders rest while the TV is nearly out */
+        if (lvl > gLvl) mem_trim_soon(0.2, lvl >= 2 ? "the TV is short of memory" : "the TV is getting tight");
         if (lvl != gLvl) { fprintf(stderr, "[mem] guard %d -> %d: app %d MB, TV free %d MB of %d%s\n", gLvl, lvl, rss, fr, tot, film ? " (a film plays)" : ""); gLvl = lvl; } } }
 }
 int main(int argc, char **argv) {
   (void)argc; (void)argv;
+  mem_tune(); /* before anything is allocated */
   /* webOS hands a native app its launch parameters as JSON in its first argument: a phone opening it to play something
      says {"cast":1} (Android TV: the link's ?cast=1, or SB_LAUNCH_CAST) */
   app_launch_params(getenv("SB_LAUNCH_CAST") ? "{\"cast\":1}" : argc > 1 ? argv[1] : NULL);
@@ -435,7 +447,7 @@ int main(int argc, char **argv) {
 #endif
     }
     if (SDL_GetTicks() - fpsT >= 1000) { fps = frames; frames = 0; fpsT = SDL_GetTicks(); }
-    mem_guard();
+    mem_guard(); mem_pump();
     { /* every 30 s a line of where the memory is (the TV ends an app that takes too much: the shared log then says what grew) */
       static Uint32 memAt; if (SDL_GetTicks() - memAt >= 30000 || !memAt) { memAt = SDL_GetTicks(); int rss, swp; plat_mem_self(&rss, &swp); long tb, pb; int tn; gfx_mem(&tb, &tn, &pb);
         static const char *SN[] = { "sign-in", "home", "discover", "library", "title", "similar", "search", "settings" };
@@ -445,6 +457,7 @@ int main(int argc, char **argv) {
     if (frame % 60 == 0) { struct stat sst; if (!stat("/tmp/sb_shot_now", &sst)) { remove("/tmp/sb_shot_now"); screenshot("/tmp/sb_shot.png", dw, dh); } } /* development: a screenshot when that file appears (the TV has no capture of its own here) */
   }
   fprintf(stderr, "[exit] after %d frames\n", frame);
+  tvtune_quit(); /* the TV's picture and sound as they were */
   p2p_shutdown(); /* the engine's threads end and its buffer files go */
   store_flush();
   SDL_GL_DeleteContext(ctx); SDL_DestroyWindow(win); SDL_Quit();

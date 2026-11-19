@@ -110,6 +110,7 @@ unsigned lib_version(void);             /* bumps on every change: boards rebuild
    (opened on another device, never played); hdrs / rhdrs: proxyHeaders' request and response headers ("Name: value"
    lines) sent with every request for it; binge: behaviorHints.bingeGroup; size / hash: videoSize / videoHash */
 #define SB_URL_MAX 4096 /* some addons' debrid links run past 2 KB (their whole setup sealed in the address) */
+#include "core/srcfilter.h"
 typedef struct { char addon[96], name[256], title[512], url[SB_URL_MAX], filename[256]; int p2p;
   char ext[512], hdrs[512], rhdrs[256], binge[96], hash[24]; double size; int notWeb, nsubs; } Stream;
 typedef struct { char name[96]; Stream *items; int n; } StreamGroup;
@@ -142,4 +143,15 @@ int  sb_disc_types(char (*out)[16], int max);
 int  sb_disc_cats(const char *type, CatalogDef *out, char (*addon)[64], int max);
 int  sb_disc_cat_genres(const CatalogDef *d, char (*out)[48], int max, int *required);
 void sb_disc_with_genre(CatalogDef *d, const char *genre);
+/* Clean sources (Settings > Playback): 0 off, 1 clean, 2 super clean (the title each source names is read too) */
+int  sb_clean_level(void);
+void sb_src_know(const char *type, const char *id);    /* super clean: asks what other titles share this one's name (once per title) */
+int  sb_src_want(const char *type, const char *vid, SrcWant *w); /* the title a video is of, as the reading needs it; returns the episode counted from the series' first (0 unknown) */
+int  sb_streams_hidden(unsigned tok);                   /* how many sources that request has left out so far */
+void sb_streams_raw_next(void);                         /* the next request: everything the addons list, nothing left out */
+/* a source that turned out to be another video than the one opened: never listed or picked for it again */
+int  sb_src_bad(const char *vid, const Stream *s);
+void sb_src_bad_add(const char *vid, const Stream *s);
+int  sb_src_bad_count(void);
+void sb_src_bad_clear(void);
 #endif

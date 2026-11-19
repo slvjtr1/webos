@@ -198,7 +198,7 @@ static void *conv_open(void *a) {
 void hls_conv_start(const char *url, int audioOrd, int flags) {
   hls_conv_stop();
   Conv *c = calloc(1, sizeof *c); if (!c) return;
-  snprintf(c->rd.url, sizeof c->rd.url, "%s", url); c->rd.size = -1; c->running = -100; c->ord = audioOrd; c->flags = (flags & HC_NOINDEX ? SBD_NOINDEX : 0) | (flags & HC_DV81 ? SBD_DV81 : 0) | (flags & HC_COPYAUDIO ? SBD_COPYAUDIO : 0); c->refs = 2; c->t0 = mono_s(); pthread_mutex_init(&c->runMu, NULL);
+  snprintf(c->rd.url, sizeof c->rd.url, "%s", url); c->rd.size = -1; c->running = -100; c->ord = audioOrd; c->flags = (flags & HC_NOINDEX ? SBD_NOINDEX : 0) | (flags & HC_DV81 ? SBD_DV81 : 0) | (flags & HC_COPYAUDIO ? SBD_COPYAUDIO : 0) | (flags & HC_STEREO ? SBD_STEREO : 0); c->refs = 2; c->t0 = mono_s(); pthread_mutex_init(&c->runMu, NULL);
   if (!start()) { c->state = -1; snprintf(c->err, sizeof c->err, "no local server"); }
   pthread_mutex_lock(&mu); c->id = ++convN; conv = c; pthread_mutex_unlock(&mu);
   if (c->state < 0) { conv_unref(c); return; }

@@ -30,4 +30,6 @@ void  update_open(void);                    /* Settings > About */
 void  update_notice(const char *label, const char *badge, void (*ok)(void));
 int   update_notice_key(void);  /* the red key while a notice is out: it takes you there (1), else 0 */
 void  update_notice_cancel(void (*ok)(void)); /* the question no longer stands (the drive went) */
+int update_beta(void);        /* Settings > About > Beta updates (off by default): pre-releases offered too */
+int update_avail_beta(void);  /* the version offered is a beta */
 #endif

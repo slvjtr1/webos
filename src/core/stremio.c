@@ -11,6 +11,8 @@
 #include "core/json.h"
 #include "core/i18n.h"
 #include "core/addons.h"
+#include "core/srcfilter.h"
+#include "core/tmdb.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -564,7 +566,6 @@ static void item_from_lib(Item *out, const cJSON *l) {
   const char *vid = js_str(s, "video_id", ""); copy_str(out->videoId, sizeof out->videoId, *vid ? vid : out->id);
   double d = js_num(s, "duration", 0), t = js_num(s, "timeOffset", 0); out->progress = d > 0 ? (float)(t / d) : 0; out->left = d > 0 ? (float)((d - t) / 60000.0) : 0;
 }
-static int cmp_mtime(const void *a, const void *b) { double x = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)a, "_mtime")), y = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)b, "_mtime")); return x < y ? 1 : x > y ? -1 : 0; }
 /* Continue Watching, as the official apps make it: what is part watched, and the series with an episode out since
    they were last watched; ordered by when each last moved (a new episode: when it came out), at most 100 */
 typedef struct { cJSON *it; double at; int newEp; char vid[SB_VID]; const TwPlay *tw; } CwPick; /* tw: Trakt's paused position, when it is the newer (it NULL: Trakt's alone) */
@@ -987,14 +988,128 @@ static int stream_parse(Stream *o, const cJSON *s, const char *addon) {
   const cJSON *subs = js_arr(s, "subtitles"); o->nsubs = subs ? cJSON_GetArraySize(subs) : 0; if (o->nsubs) stream_subs_keep(o->url[0] ? o->url : o->ext, subs, addon);
   return 1;
 }
-typedef struct { unsigned tok; int pending, total, cancelled, count; StreamPartCb part; StreamDoneCb done; StreamAnsCb ans; void *ud; cJSON *own; } StreamReq;
+typedef struct { unsigned tok; int pending, total, cancelled, count; StreamPartCb part; StreamDoneCb done; StreamAnsCb ans; void *ud; cJSON *own; int clean, series, season, episode, absEp, hidden; char type[16], id[64], vid[96]; SrcWant want; } StreamReq;
 typedef struct { StreamReq *req; int idx; char name[96]; } StreamPart;
 static unsigned streamTok;
+
+/* ---- Clean sources (Settings > Playback): off, clean, super clean ---- */
+int sb_clean_level(void) {
+  static int asked; if (!asked) { asked = 1; if (!*store_get("cleanSuperSeen", "")) { store_set("cleanSuperSeen", "1"); if (!strcmp(store_get("cleanSources", "super"), "true")) store_remove("cleanSources"); } } /* once: "on" from before Super clean existed becomes the new default; chosen again later, Clean stays */
+  const char *v = store_get("cleanSources", "super"); return !strcmp(v, "false") ? 0 : !strcmp(v, "true") ? 1 : 2; }
+/* sources that turned out to be another video than the one opened (the player found out, or the viewer said so): never
+   listed or picked for that video again. Kept as short keys, the newest 300 */
+static void bad_key(const char *vid, const Stream *s, char out[20]) {
+  const char *u = s->url; size_t n = strlen(u); if (s->p2p || !strncmp(u, "p2p://", 6)) n = strcspn(u, "?"); /* (a torrent: its hash and file, whatever trackers follow) */
+  unsigned long long h = str_hash(vid); for (size_t i = 0; i < n; i++) h = (h ^ (unsigned char)u[i]) * 1099511628211ULL;
+  snprintf(out, 20, "%016llx", h);
+}
+int sb_src_bad(const char *vid, const Stream *s) {
+  const cJSON *a = store_node("badSrc"), *x; if (!cJSON_IsArray(a) || !a->child || !s->url[0]) return 0;
+  char k[20]; bad_key(vid, s, k); cJSON_ArrayForEach(x, a) if (cJSON_IsString(x) && !strcmp(x->valuestring, k)) return 1;
+  return 0;
+}
+void sb_src_bad_add(const char *vid, const Stream *s) {
+  if (!s->url[0] || sb_src_bad(vid, s)) return;
+  cJSON *a = store_node("badSrc"); if (!cJSON_IsArray(a)) { a = cJSON_CreateArray(); store_set_node("badSrc", a); }
+  char k[20]; bad_key(vid, s, k); cJSON_AddItemToArray(a, cJSON_CreateString(k)); while (cJSON_GetArraySize(a) > 300) cJSON_DeleteItemFromArray(a, 0);
+  store_set_node("badSrc", a); fprintf(stderr, "[streams] a source of %s was another video: left out from now on\n", vid);
+}
+int sb_src_bad_count(void) { const cJSON *a = store_node("badSrc"); return cJSON_IsArray(a) ? cJSON_GetArraySize(a) : 0; }
+void sb_src_bad_clear(void) { store_remove("badSrc"); }
+
+/* Super clean: what TMDB knows around a title, asked once per title while the app runs: its own name there and in its
+   own language (a release may carry either), and the other real titles its name is found in (a spin-off, a sequel, a
+   remake, each with its year). Two short requests when its page or its streams open; the sources are read with
+   whatever has come by then */
+typedef struct { char id[32]; int ready, tmdbId; char alias[3][160]; int nalias; char other[24][120]; int oyear[24], nother; } Known;
+static Known known[12]; static int knownAt;
+static Known *known_of(const char *id) { for (int i = 0; i < 12; i++) if (known[i].id[0] && !strcmp(known[i].id, id)) return &known[i]; return NULL; }
+typedef struct { char id[32], name[160]; int series; } KnowReq;
+static int has_latin(const char *s) { for (; *s; s++) if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z')) return 1; return 0; }
+static void known_alias(Known *k, const char *nm, const char *own) { if (!*nm || !has_latin(nm) || !strcasecmp(nm, own) || k->nalias >= 3) return; for (int i = 0; i < k->nalias; i++) if (!strcasecmp(k->alias[i], nm)) return; copy_str(k->alias[k->nalias++], 160, nm); }
+static void on_know_search(int st, const unsigned char *b, size_t n, void *ud) {
+  (void)n; KnowReq *q = ud; Known *k = known_of(q->id); cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *res = js_arr(j, "results"), *x;
+  if (k && res) cJSON_ArrayForEach(x, res) {
+    const char *nm = js_str(x, q->series ? "name" : "title", ""), *on = js_str(x, q->series ? "original_name" : "original_title", ""); int yr = atoi(js_str(x, q->series ? "first_air_date" : "release_date", ""));
+    if (!*nm || (k->tmdbId && (int)js_num(x, "id", 0) == k->tmdbId)) continue; /* (itself) */
+    if (k->nother < 24) { copy_str(k->other[k->nother], 120, nm); k->oyear[k->nother++] = yr; }
+    if (*on && has_latin(on) && strcasecmp(on, nm) && k->nother < 24) { copy_str(k->other[k->nother], 120, on); k->oyear[k->nother++] = yr; } }
+  if (k) { k->ready = 1; fprintf(stderr, "[streams] %s: %d other title(s) share its name, %d name(s) of its own\n", q->id, k->nother, k->nalias + 1); }
+  net_json_free(j); free(q);
+}
+static void on_know_find(int st, const unsigned char *b, size_t n, void *ud) {
+  (void)n; KnowReq *q = ud; Known *k = known_of(q->id); cJSON *j = st == 200 ? net_json(b) : NULL; const cJSON *x = cJSON_GetArrayItem(js_arr(j, q->series ? "tv_results" : "movie_results"), 0);
+  if (k && x) { k->tmdbId = (int)js_num(x, "id", 0); known_alias(k, js_str(x, q->series ? "name" : "title", ""), q->name); known_alias(k, js_str(x, q->series ? "original_name" : "original_title", ""), q->name); }
+  net_json_free(j);
+  char enc[500], path[600]; addon_urlenc(q->name, enc, sizeof enc); snprintf(path, sizeof path, "/search/%s?query=%s&include_adult=false&language=en-US", q->series ? "tv" : "movie", enc);
+  if (!k || !k->tmdbId || !tmdb_request(path, on_know_search, q)) { if (k) k->id[0] = 0; free(q); } /* (not found there: nothing known, asked again another time) */
+}
+void sb_src_know(const char *type, const char *id) {
+  if (sb_clean_level() < 2 || !tmdb_has_key() || !sb_is_imdb(id) || known_of(id) || strlen(id) >= 32) return;
+  int series = type && !strcmp(type, "series"); if (!series && (!type || strcmp(type, "movie"))) return;
+  const char *name = js_str(sb_meta_cached(type, id), "name", ""); if (!*name) return; /* (once its details are in) */
+  Known *k = &known[knownAt]; knownAt = (knownAt + 1) % 12; memset(k, 0, sizeof *k); copy_str(k->id, sizeof k->id, id);
+  KnowReq *q = calloc(1, sizeof *q); copy_str(q->id, sizeof q->id, id); copy_str(q->name, sizeof q->name, name); q->series = series;
+  char path[160]; snprintf(path, sizeof path, "/find/%s?external_source=imdb_id&language=en-US", id);
+  if (!tmdb_request(path, on_know_find, q)) { k->id[0] = 0; free(q); }
+}
+/* the title a video is of, as the reading needs it: names, years, the episode counted from the series' first (0 when
+   the count is not known) */
+int sb_src_want(const char *type, const char *vid, SrcWant *w) {
+  memset(w, 0, sizeof *w); char id[64]; size_t l = strcspn(vid, ":"); if (l >= sizeof id) l = sizeof id - 1; memcpy(id, vid, l); id[l] = 0;
+  int season = 0, episode = 0, absEp = 0; w->series = type && !strcmp(type, "series"); if (w->series) src_vid_episode(vid, &season, &episode);
+  const cJSON *m = sb_meta_cached(type, id); const char *nm = js_str(m, "name", "");
+  if (*nm) copy_str(w->name[w->nname++], 160, nm);
+  const char *ri = js_str(m, "releaseInfo", js_str(m, "year", "")); int y = atoi(ri); if (!y) y = (int)js_num(m, "year", 0);
+  if (y > 1880 && y < 2200) { w->year = y; const char *d = ri + strcspn(ri, "-\xe2"); while (*d && !(*d >= '0' && *d <= '9')) d++; int y2 = atoi(d); if (y2 >= y && y2 < 2200 && d > ri) w->yearEnd = y2; }
+  const Known *k = known_of(id);
+  if (k && k->ready) { for (int i = 0; i < k->nalias && w->nname < 4; i++) copy_str(w->name[w->nname++], 160, k->alias[i]);
+    for (int i = 0; i < k->nother; i++) { copy_str(w->other[w->nother], 120, k->other[i]); w->oyear[w->nother++] = k->oyear[i]; } }
+  if (season > 1) { const cJSON *v; int before = 0, mine = 0; cJSON_ArrayForEach(v, js_arr(m, "videos")) { int s = (int)js_num(v, "season", 0), e = (int)js_num(v, "episode", js_num(v, "number", 0)); if (s >= 1 && s < season && e >= 1) before++; else if (s == season && e == episode) mine = 1; }
+    if (before && mine) absEp = before + episode; }
+  return absEp;
+}
+static void want_fill(StreamReq *r) { r->absEp = sb_src_want(r->type, r->vid, &r->want); }
+static struct { unsigned tok; int n; } hiddenOf[8]; static int hiddenAt;
+int sb_streams_hidden(unsigned tok) { for (int i = 0; i < 8; i++) if (tok && hiddenOf[i].tok == tok) return hiddenOf[i].n; return 0; }
+static void hidden_note(const StreamReq *r) { for (int i = 0; i < 8; i++) if (hiddenOf[i].tok == r->tok) { hiddenOf[i].n = r->hidden; return; } hiddenOf[hiddenAt].tok = r->tok; hiddenOf[hiddenAt].n = r->hidden; hiddenAt = (hiddenAt + 1) % 8; }
+static int rawNext;
+void sb_streams_raw_next(void) { rawNext = 1; }
+/* Clean sources: programs, archives and too-small files go, and the sources known to be another video; for an episode,
+   the sources that name another one go too (a series numbered from its first episode is read that way: "S01E45" is the
+   5th of season 3; where that count is not known and every source of the addon numbers it so, the addon is believed).
+   Super clean also leaves out what names another title (a spin-off, a sequel, a film of another year), unless that is
+   all an addon has and nothing says which other title it would be, and cinema recordings when the addon has real copies.
+   A torrent's address carries the episode, so the right file of a pack is the one played */
+static void streams_clean(StreamGroup *g, StreamReq *r) {
+  enum { V_OK, V_JUNK, V_EP, V_TITLE, V_OTHER, V_CAM, V_BAD };
+  unsigned char *v = calloc(g->n ? g->n : 1, 1); int n = 0, hit = 0, miss = 0, s1all = 1, thit = 0, tweak = 0, good = 0, out = 0, k = 0, super = r->clean >= 2;
+  if (!v) { fprintf(stderr, "[streams] %s: no memory to sort its %d source(s): listed as they came\n", g->name, g->n); return; }
+  want_fill(r);
+  for (int i = 0; i < g->n; i++) { Stream *x = &g->items[i]; if (x->ext[0] && !x->url[0]) continue;
+    n++;
+    if (sb_src_bad(r->vid, x)) { v[i] = V_BAD; continue; }
+    if (src_junk(x->name, x->title, x->filename, x->size, r->series)) { v[i] = V_JUNK; continue; }
+    char uf[300], t[1700]; src_url_file(x->url, uf, sizeof uf); snprintf(t, sizeof t, "%s\n%s\n%s", x->title, x->filename, uf);
+    if (r->season > 0) { int s1 = 0, e = src_episode_verdict_abs(t, r->season, r->episode, r->absEp, &s1); if (e > 0) hit++; else if (e < 0) { v[i] = V_EP; miss++; if (!s1) s1all = 0; continue; } }
+    if (super && r->want.nname) { int tv = src_title_verdict(t, &r->want); if (tv > 0) thit++; else if (tv == -2) { v[i] = V_OTHER; continue; } else if (tv == -1) { v[i] = V_TITLE; tweak++; continue; } }
+    if (super && src_is_cam(t)) { v[i] = V_CAM; continue; }
+    good++; }
+  int believeEp = !hit && miss == n && n >= 3 && s1all && r->season > 1 && !r->absEp, believeTitle = !thit && tweak == n && n >= 3, keepCams = good < 2;
+  for (int i = 0; i < g->n; i++) { if (v[i] == V_JUNK || v[i] == V_BAD || v[i] == V_OTHER || (v[i] == V_EP && !believeEp) || (v[i] == V_TITLE && !believeTitle) || (v[i] == V_CAM && !keepCams)) { out++; continue; }
+    Stream *x = &g->items[i]; if (x->p2p && r->season > 0) { size_t l = strlen(x->url); if (l + 36 < sizeof x->url) snprintf(x->url + l, sizeof x->url - l, "%sse=%d.%d.%d", !strchr(x->url, '?') ? "?" : x->url[l - 1] == '?' ? "" : "&", r->season, r->episode, r->absEp); }
+    if (k != i) g->items[k] = *x; k++; }
+  if (out) { int c[7] = { 0 }; for (int i = 0; i < g->n; i++) c[v[i]]++;
+    fprintf(stderr, "[streams] %s: %d of %d source(s) left out (%d not a video, %d another episode, %d another title, %d cinema recording(s), %d known wrong)\n", g->name, out, g->n, c[V_JUNK], believeEp ? 0 : c[V_EP], c[V_OTHER] + (believeTitle ? 0 : c[V_TITLE]), keepCams ? 0 : c[V_CAM], c[V_BAD]); }
+  r->hidden += out; hidden_note(r);
+  g->n = k; free(v);
+}
 static void streams_answer(StreamPart *p, const cJSON *arr) {
   StreamReq *r = p->req; const cJSON *s;
   StreamGroup g; copy_str(g.name, sizeof g.name, p->name); int na = arr ? cJSON_GetArraySize(arr) : 0; if (!r->ans && na > 40) na = 40; /* the best-stream pick reads all of them, as the web does: a 4K-first addon lists its 1080p files late */
   g.items = calloc(na ? na : 1, sizeof(Stream)); g.n = 0;
   if (arr) cJSON_ArrayForEach(s, arr) { if (g.n >= na) break; if (stream_parse(&g.items[g.n], s, p->name)) g.n++; }
+  if (r->clean) streams_clean(&g, r);
   r->total += g.n; if (g.n) r->part(&g, p->idx, r->ud); else free(g.items);
 }
 static void stream_part_done(StreamPart *p) {
@@ -1030,7 +1145,13 @@ int sb_stream_addons(const char *type, const char *vid, char (*names)[96], int m
 }
 /* only >= 0: that one of the addons serving the video (in the user's order), alone */
 static unsigned streams_req(const char *type, const char *vid, int only, StreamPartCb part, StreamDoneCb done, StreamAnsCb ans, void *ud) {
-  cJSON *a = sb_addons(); StreamReq *r = calloc(1, sizeof *r); r->tok = ++streamTok; r->part = part; r->done = done; r->ans = ans; r->ud = ud;
+  cJSON *a = sb_addons(); StreamReq *r = calloc(1, sizeof *r);
+  if (!r) { fprintf(stderr, "[streams] no memory to ask for %s: none\n", vid ? vid : "?"); done(0, ud); return 0; }
+  r->tok = ++streamTok; if (!r->tok) r->tok = ++streamTok; r->part = part; r->done = done; r->ans = ans; r->ud = ud;
+  r->clean = sb_clean_level(); if (rawNext) { r->clean = 0; rawNext = 0; } /* (asked once with everything the addons list) */
+  r->series = type && !strcmp(type, "series"); if (r->series && !src_vid_episode(vid, &r->season, &r->episode)) r->season = r->episode = 0;
+  copy_str(r->type, sizeof r->type, type ? type : ""); copy_str(r->vid, sizeof r->vid, vid ? vid : ""); { size_t l = strcspn(r->vid, ":"); if (l >= sizeof r->id) l = sizeof r->id - 1; memcpy(r->id, r->vid, l); r->id[l] = 0; }
+  if (r->clean >= 2) sb_src_know(r->type, r->id);
   const cJSON *own = video_streams(type, vid);
   if (own && only > 0) own = NULL, a = NULL; /* (its own list is the one group) */
   if (own) { r->own = cJSON_Duplicate(own, 1); StreamPart *p = calloc(1, sizeof *p); p->req = r; copy_str(p->name, sizeof p->name, T("This title")); r->pending = r->count = 1;

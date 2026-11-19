@@ -10,6 +10,7 @@
 #define SBD_NOINDEX 1
 #define SBD_DV81 2       /* a Dolby Vision profile 7 picture goes out as profile 8.1: its enhancement layer dropped, each RPU rewritten */
 #define SBD_COPYAUDIO 4  /* the chosen audio track goes out as it is (not decoded) */
+#define SBD_STEREO 8     /* the converted sound goes out as stereo, its dialogue (the centre) kept clear and its surrounds folded in (for the TV's own speakers) */
 typedef struct SbdSrc SbdSrc;
 typedef int (*sbd_read)(void *ud, long long pos, unsigned char *buf, int len);   /* bytes read, 0 at the end, < 0 failed */
 typedef int (*sbd_write)(void *ud, const unsigned char *p, int n);                /* n, or < 0 to stop the run */
