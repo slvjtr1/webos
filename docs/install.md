@@ -6,7 +6,7 @@ Two ways: the Homebrew Channel, or the `.ipk` file from a computer.
 The Homebrew Channel is installed on TVs set up with the [webOS Homebrew](https://www.webosbrew.org/) tools.
 
 1. **Open the Homebrew Channel** on the TV, open its settings and choose **Repositories**.
-2. **Add** `https://origin-webos.vercel.app/apps.json`.
+2. **Add** `https://slvjtr1.github.io/webos/apps.json`.
 3. **Find Stremio Origin** in the list and **install it**, then open Stremio Origin and sign in with your Stremio account.
 
 ## With a computer (Developer Mode)

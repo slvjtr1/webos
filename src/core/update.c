@@ -29,8 +29,8 @@
 #endif
 
 #define UPD_GH "https://api.github.com/repos/slvjtr1/webos/releases?per_page=8"
-#define UPD_MAN "https://origin-webos.vercel.app/api/apps/" SB_APP_ID "/manifest.json"
-#define UPD_MAN_BETA "https://origin-webos.vercel.app/api/apps/" SB_APP_ID "/beta/manifest.json" /* (its own file: builds that know no channel only ever read the stable one) */
+#define UPD_MAN "https://slvjtr1.github.io/webos/api/apps/" SB_APP_ID "/manifest.json"
+#define UPD_MAN_BETA "https://slvjtr1.github.io/webos/api/apps/" SB_APP_ID "/beta/manifest.json" /* (its own file: builds that know no channel only ever read the stable one) */
 typedef UpdRel Rel; /* (src/core/updpick.c: the one check for both sources) */
 static struct {
   char cur[24], appinfo[1200]; int read; Rel avail; int has, state; char msg[240]; unsigned serial;

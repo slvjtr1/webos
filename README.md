@@ -40,7 +40,7 @@
 - 28 languages, Arabic included (right to left); updates and Share logs from the app
 
 ## Install
-LG TVs on webOS 3 or later (ARM). In the Homebrew Channel, open Settings > Repositories and add `https://origin-webos.vercel.app/apps.json`, then install Stremio Origin from it. Or install the `.ipk` from [Releases](https://github.com/slvjtr1/webos/releases) with the TV in Developer Mode. Step by step: [install guide](docs/install.md) or [the website](https://origin-webos.vercel.app).
+LG TVs on webOS 3 or later (ARM). In the Homebrew Channel, open Settings > Repositories and add `https://slvjtr1.github.io/webos/apps.json`, then install Stremio Origin from it. Or install the `.ipk` from [Releases](https://github.com/slvjtr1/webos/releases) with the TV in Developer Mode. Step by step: [install guide](docs/install.md) or [the website](https://slvjtr1.github.io/webos).
 
 ## Compatibility
 Developed and tested on webOS 4.4, and reported working on webOS 4 to 25. [More](docs/compatibility.md).

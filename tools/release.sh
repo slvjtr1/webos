@@ -33,7 +33,7 @@ done
 VER="${ARGS[0]}"
 SITE="${ARGS[1]:-$ROOT/site}"
 ID=tv.stremioorigin.app
-BASE="https://origin-webos.vercel.app"
+BASE="https://slvjtr1.github.io/webos"
 SRC="https://github.com/slvjtr1/webos"
 P='(0|[1-9][0-9]{0,4})'
 [[ "$VER" =~ ^$P\.$P\.$P$ ]] || { echo "version must look like 1.0.1 (numbers without leading zeros, at most 5 digits each)"; exit 2; }
@@ -138,4 +138,4 @@ if os.path.exists(bp):
 print('site updated:', pid, ver, sha)
 EOF
 if [ "$BETA" = 1 ]; then echo "upload $IPK to the GitHub PRE-release v$VER (gh release create v$VER --prerelease), then commit site/ and push"
-else echo "upload $IPK to the GitHub release v$VER, then commit site/ and push (Vercel deploys it)"; fi
+else echo "upload $IPK to the GitHub release v$VER, then commit site/ and push (GitHub Pages publishes it)"; fi
