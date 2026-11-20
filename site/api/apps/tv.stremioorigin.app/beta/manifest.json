@@ -1,0 +1,15 @@
+{
+  "id": "tv.stremioorigin.app",
+  "version": "2.0.8",
+  "type": "native",
+  "title": "Stremio Origin",
+  "appDescription": "A native app for Stremio addons, written in C. You bring the account and addons; it ships empty. 28 languages. Unofficial.",
+  "iconUri": "https://slvjtr1.github.io/webos/icon.png",
+  "sourceUrl": "https://github.com/slvjtr1/webos",
+  "rootRequired": false,
+  "ipkUrl": "https://github.com/slvjtr1/webos/releases/download/v2.0.8/tv.stremioorigin.app_2.0.8_arm.ipk",
+  "ipkHash": {
+    "sha256": "f1918efc45c97d48ea09383cdde397c8e9344c7848bf5c4b78c9b5c272618033"
+  },
+  "channel": "beta"
+}
