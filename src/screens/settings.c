@@ -75,7 +75,7 @@ static const Opt DTSM[] = { { "auto", "Auto" }, { "convert", "Convert" }, { "off
 static const Opt ASPECT[] = { { "fit", "Original" }, { "fill", "Fill the screen" }, { "zoom", "Zoom" } };
 static const Opt SIZES[] = { { "0", "72%" }, { "1", "80%" }, { "2", "100%" }, { "3", "120%" }, { "4", "140%" }, { "5", "160%" }, { "6", "180%" } };
 static const Opt COLORS[] = { { "#ffffff", "White" }, { "#ffe600", "Yellow" }, { "#00e5ff", "Cyan" } };
-static const Opt OUTL[] = { { "#000000", "Black" }, { "#ffffff", "White" } };
+static const Opt OUTL[] = { { "#000000", "Black" }, { "#ffffff", "White" }, { "none", "Off" } };
 static const Opt SPOILO[] = { { "off", "Off" }, { "blur", "Blur pictures" }, { "hide", "Blur pictures and text" } };
 static const Opt BGS[] = { { "0", "None" }, { "1", "Solid" }, { ".6", "Transparent" } };
 static const Opt ASSO[] = { { "styled", "Styled" }, { "plain", "Plain" } };
@@ -83,7 +83,7 @@ static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" 
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 12
 #define MAXROWS 48
-static Setting playBase[17], playS[13], seekS[6], subsS[13], audS[7], picS[2], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[12];
+static Setting playBase[17], playS[13], seekS[6], subsBase[14], subsS[14], audS[7], picS[2], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[12];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -206,7 +206,7 @@ static unsigned usbSeen;
 static void set_count(const Setting *opts, int n) { for (int i = 0; i < ncat; i++) if (cats[i].opts == opts) { cats[i].n = n; if (S.cat == i && S.idx >= n) S.idx = n > 0 ? n - 1 : 0; } }
 static void play_layout(void) {
   int on = strcmp(store_get("bgTrailer", "true"), "false") != 0, n = 0;
-  playS[n++] = playBase[4]; playS[n++] = playBase[15]; playS[n++] = playBase[14]; playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
+  playS[n++] = playBase[4]; if (best_on()) playS[n++] = playBase[15]; /* (I use debrid: only while the best stream plays by itself) */ playS[n++] = playBase[14]; playS[n++] = playBase[1]; playS[n++] = playBase[12]; playS[n++] = playBase[8]; playS[n++] = playBase[2]; { const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7]; }
   playS[n++] = playBase[13]; /* torrents: how they connect, then their USB cache, last */
   iUsb = n; playS[n++] = playBase[5]; /* the USB cache, last */
   set_count(playS, n);
@@ -215,6 +215,10 @@ static void play_layout(void) {
     if (strcmp(store_get("seekPreviews", "true"), "false")) seekS[n++] = playBase[11]; } /* (and, while they are on, waiting for them first) */
   set_count(seekS, n);
   n = 4; lookS[n++] = playBase[3]; if (on) lookS[n++] = playBase[6]; set_count(lookS, n);
+  /* Subtitles: the shadow right under the outline; Remove Arabic diacritics under Clean subtitle marks while it is on */
+  { static const int ORD[] = { 0, 1, 2, 3, 4, 5, 6, 11, 7, 8, 9, 12, 13, 10 }; n = 0;
+    for (int i = 0; i < (int)(sizeof ORD / sizeof *ORD); i++) { if (ORD[i] == 13 && !strcmp(store_get("subsCleanMarks", "true"), "false")) continue; subsS[n++] = subsBase[ORD[i]]; }
+    set_count(subsS, n); }
   set_count(traktS, trakt_opts());
   set_count(supS, about_opts());
 }
@@ -244,23 +248,24 @@ static void build(void) {
   set_s(&playBase[7], "dv7Convert", "Dolby Vision for Blu-ray copies", "Their picture is converted on this TV so it shows in Dolby Vision, not HDR10", OO, 2, "true");
   set_s(&playBase[6], "bgTrailerVol", "Volume", "The sound comes up softly to this level", SVOL, 10, "70"); playBase[6].sub = 1; /* (shown right under the trailers while they are on: play_layout; drawn as theirs, set in) */
   usb_row();
-  set_s(&subsS[0], "subsLang", "Default subtitles", "Chosen by itself when a film starts", LANG_OPTS, NLANGOPTS, "eng");
+  set_s(&subsBase[0], "subsLang", "Default subtitles", "Chosen by itself when a film starts", LANG_OPTS, NLANGOPTS, "eng");
   { static const Opt SM[] = { { "all", "All subtitles" }, { "forced", "Forced only" } }; /* (PR #50: forced tracks are the lines in another language and the signs) */
-    set_s(&subsS[1], "subsMode", "Subtitle preference", "Forced only: just the lines in another language and the signs, from a forced track", SM, 2, "all"); }
-  set_s(&subsS[2], "subtitleSize", "Size", "Also in the player, under Subtitles", SIZES, 7, "2");
+    set_s(&subsBase[1], "subsMode", "Subtitle preference", "Forced only: just the lines in another language and the signs, from a forced track", SM, 2, "all"); }
+  set_s(&subsBase[2], "subtitleSize", "Size", "Also in the player, under Subtitles", SIZES, 7, "2");
   { static Opt FL[SUBF_N], FA[SUBF_N]; static char fv[SUBF_N][4]; for (int i = 0; i < SUBF_N; i++) { snprintf(fv[i], sizeof fv[i], "%d", i); FL[i].v = FA[i].v = fv[i]; FL[i].lb = SUBF_LAT[i]; FA[i].lb = SUBF_AR[i]; } /* (the fonts by name; Default the app's own) */
-    set_s(&subsS[3], "subsFont", "Font", "Also in the player, under Subtitles", FL, SUBF_N, "0"); set_s(&subsS[4], "subsFontAr", "Arabic font", "For subtitles in Arabic", FA, SUBF_N, "0"); }
-  set_s(&subsS[5], "subsColor", "Colour", "", COLORS, 3, "#ffffff");
-  set_s(&subsS[6], "subsOutlineColor", "Outline", "", OUTL, 2, "#000000");
-  set_s(&subsS[7], "subsBgStyle", "Background", "", BGS, 3, "0");
+    set_s(&subsBase[3], "subsFont", "Font", "Also in the player, under Subtitles", FL, SUBF_N, "0"); set_s(&subsBase[4], "subsFontAr", "Arabic font", "For subtitles in Arabic", FA, SUBF_N, "0"); }
+  set_s(&subsBase[5], "subsColor", "Colour", "", COLORS, 3, "#ffffff");
+  set_s(&subsBase[6], "subsOutlineColor", "Outline", "Off: the letters alone, with the shadow under them if it is on", OUTL, 3, "#000000");
+  set_s(&subsBase[7], "subsBgStyle", "Background", "", BGS, 3, "0");
   /* the height in %, 1 % at a time as in the player (where it can be seen while set); a height kept as one of the old six steps carries over */
   { static Opt PP[29]; static char pv[29][4], pl[29][8]; for (int i = 0; i < 29; i++) { snprintf(pv[i], 4, "%d", i + 2); snprintf(pl[i], 8, "%d%%", i + 2); PP[i].v = pv[i]; PP[i].lb = pl[i]; }
     if (!store_get("subsPosPct", "")[0]) { static const int OLD[6] = { 3, 8, 13, 18, 23, 28 }; int i = atoi(store_get("subsPosition", "1")); char b[8]; snprintf(b, sizeof b, "%d", OLD[i < 0 || i > 5 ? 1 : i]); store_set("subsPosPct", b); }
-    set_s(&subsS[9], "subsPosPct", "Position", "How high over the bottom of the picture; also in the player", PP, 29, "8"); }
-  { static const Opt BR[] = { { "100", "100%" }, { "80", "80%" }, { "60", "60%" }, { "40", "40%" } }; set_s(&subsS[8], "subsBright", "Brightness", "", BR, 4, "100"); } /* (PR #39: softer on an OLED in the dark; under Background) */
-  set_s(&subsS[11], "subsShadow", "Shadow", "A soft shadow under the letters, down and to the right", SHADOWO, 4, "medium");
-  set_s(&subsS[12], "subsCleanMarks", "Clean subtitle marks", "Takes out ( ) and quotation marks around lines; the words inside and the punctuation stay", OO, 2, "true");
-  set_s(&subsS[10], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
+    set_s(&subsBase[9], "subsPosPct", "Position", "How high over the bottom of the picture; also in the player", PP, 29, "8"); }
+  { static const Opt BR[] = { { "100", "100%" }, { "80", "80%" }, { "60", "60%" }, { "40", "40%" } }; set_s(&subsBase[8], "subsBright", "Brightness", "", BR, 4, "100"); } /* (PR #39: softer on an OLED in the dark; under Background) */
+  set_s(&subsBase[11], "subsShadow", "Shadow", "A soft shadow under the letters, down and to the right", SHADOWO, 4, "medium");
+  set_s(&subsBase[12], "subsCleanMarks", "Clean subtitle marks", "Takes out ( ) and quotation marks around lines; the words inside and the punctuation stay", OO, 2, "true");
+  set_s(&subsBase[13], "subsCleanTashkeel", "Remove Arabic diacritics", "Takes out the vowel marks (tashkeel) from Arabic lines; the letters stay", OO, 2, "false"); subsBase[13].sub = 1; /* (under Clean subtitle marks, while it is on) */
+  set_s(&subsBase[10], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
   /* the audio language: Original (the film's own track, as it starts) first and by default, then a language, picked by
      itself when a film has it (one row: the old "Auto audio track" switch is folded in: off was Original) */
   { static Opt AUDO[NLANGOPTS]; AUDO[0].v = "orig"; AUDO[0].lb = "Original"; for (int i = 1; i < NLANGOPTS; i++) AUDO[i] = LANG_OPTS[i];
@@ -346,7 +351,7 @@ static void sync_now(void) { toast(T("Syncing…"), 1500, NULL); sb_pull_library
 static int ab_busy(const Setting *o) { return !strcmp(o->k, "autoBest") && best_speed_busy(); }
 static void on_speed(int ok, double mbps, void *ud) { (void)mbps; (void)ud;
   if (!ok) { toast(T("Could not check the connection. Try again in a moment"), 2600, NULL); return; }
-  store_set("autoBest", "true"); toast(T1("Your connection: {n} Mbps. Play now starts the best stream", "n", store_get("netMbps", "0")), 3800, NULL); }
+  store_set("autoBest", "true"); play_layout(); S.dirty = 1; /* (I use debrid comes in under it) */ toast(T1("Your connection: {n} Mbps. Play now starts the best stream", "n", store_get("netMbps", "0")), 3800, NULL); }
 int settings_apply_pref(const char *k, const char *v) {
   if (!strcmp(store_get(k, ""), v)) return 0;
   if (!strcmp(k, "autoBest") && !strcmp(v, "true") && !best_on()) { if (!best_speed_busy()) { best_caps_probe(NULL, NULL); best_speed_run(on_speed, NULL); } return 1; } /* (on only once this TV's line is measured, as here) */
@@ -355,7 +360,7 @@ int settings_apply_pref(const char *k, const char *v) {
   store_set(k, v); S.dirty = 1;
   if (!strcmp(k, "bingeWatch")) store_set("enableNextVideo", v);
   if (!strcmp(k, "p2pTcpOnly")) p2p_connections_changed();
-  if (!strcmp(k, "bgTrailer") || !strcmp(k, "seekPreviews")) play_layout();
+  if (!strcmp(k, "bgTrailer") || !strcmp(k, "seekPreviews") || !strcmp(k, "subsCleanMarks") || !strcmp(k, "autoBest")) play_layout();
   if (!strcmp(k, "accent")) accent_apply();
   return 1;
 }
@@ -377,7 +382,7 @@ static void set_val(Setting *o, const char *v, int dir) {
       int c = S.cat, i = S.idx, z = S.zone; enter(NULL); S.cat = c; S.idx = i; S.zone = z == 2 ? 1 : z; show_cat(c, 0); S.enterAt = app_now() - 10; } return; } /* the same place, in the new language */
   store_set(o->k, v); S.dirty = 1;
   if (!strcmp(o->k, "defaultAudioTrack")) store_set("enableDefaultAudioTrack", strcmp(v, "orig") ? "true" : "false"); /* (a language: picked by itself; Original: the film's own. Kept for the phone's remote and older builds) */
-  if (!strcmp(o->k, "bgTrailer") || !strcmp(o->k, "seekPreviews")) play_layout(); /* its volume row comes and goes with it, right under it */
+  if (!strcmp(o->k, "bgTrailer") || !strcmp(o->k, "seekPreviews") || !strcmp(o->k, "subsCleanMarks") || !strcmp(o->k, "autoBest")) play_layout(); /* its volume row comes and goes with it, right under it */
   if (!strcmp(o->k, "traktRows") || !strcmp(o->k, "traktMarks") || !strcmp(o->k, "traktCw")) board_invalidate(); /* Trakt's rows come and go on Home */
   if (!strncmp(o->k, "adOn_", 5)) { board_invalidate(); cats[5].n = addon_opts(); return; } /* an addon on/off here: rows, metadata and streams follow */
   if (!strcmp(o->k, "bingeWatch")) store_set("enableNextVideo", v);
@@ -675,7 +680,7 @@ static void preview_subs(float x, float y, float w, float h) {
   int sz = atoi(store_get("subtitleSize", "2")); static const int SZ[] = { 72, 80, 100, 120, 140, 160, 180 }; if (sz < 0 || sz > 6) sz = 2; int px = (int)(34 * SZ[sz] / 100.0f + 0.5f);
   uint32_t col = hexcol(store_get("subsColor", "#ffffff")), ol = hexcol(store_get("subsOutlineColor", "#000000")); float bo = (float)atof(store_get("subsBgStyle", "0"));
   { float k = atoi(store_get("subsBright", "100")) / 100.0f; if (k > 0 && k < 1) { col = (col & 0xff000000u) | ((uint32_t)(((col >> 16) & 255) * k) << 16) | ((uint32_t)(((col >> 8) & 255) * k) << 8) | (uint32_t)((col & 255) * k); ol = (ol & 0xff000000u) | ((uint32_t)(((ol >> 16) & 255) * k) << 16) | ((uint32_t)(((ol >> 8) & 255) * k) << 8) | (uint32_t)((ol & 255) * k); } } /* (the brightness, as the player draws it) */
-  unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000); if (sig != subSig) { if (subSig) { subAt = app_now(); orbs_push(&subOrbs, ORB_DONE, 0.5f); } subSig = sig; }
+  unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000) ^ (!strcmp(store_get("subsOutlineColor", "#000000"), "none") ? 0x5bd1e995u : 0) ^ ((unsigned)store_get("subsShadow", "medium")[0] << 20); if (sig != subSig) { if (subSig) { subAt = app_now(); orbs_push(&subOrbs, ORB_DONE, 0.5f); } subSig = sig; }
   orbs_step(&subOrbs, app_dt(), 1, 1, 2.6f); orbs_draw_in(&subOrbs, 0.5f, x, y, w, h, 18); /* the app's glows, over the picture, inside its corners */
   gfx_rrect_v(x, y, w, h, 18, BLACK_A(0), BLACK_A(170)); /* the player's shade at the foot */
   int arF = S.cat == S.shown && S.zone >= 1 && S.idx < cats[S.cat].n && !strcmp(cats[S.cat].opts[S.idx].k, "subsFontAr"); /* (the Arabic font being set: the line in Arabic) */
@@ -686,7 +691,11 @@ static void preview_subs(float x, float y, float w, float h) {
     if (!pgSet) { tween_set(&pg, want); pgSet = 1; } else if (pg.to != want) tween_to(&pg, want, 0.25f, EASE_OUT); tween_tick(&pg, app_dt()); ty = y + h - pg.v - n * lh; if (ty < y + 8) ty = y + 8; } float ch = subAt > 0 ? ease_apply(EASE_OUT, (float)(app_now() - subAt) / 0.35f) : 1; /* a change: the line settles in */
   gfx_clip_push(x, y, w, h); gfx_opacity_push(0.4f + 0.6f * ch); gfx_offset_push(0, 8 * (1 - ch));
   if (bo > 0) { float tw = cW > maxW ? maxW : cW; gfx_rrect(x + w / 2 - tw / 2 - 18, ty - 4, tw + 36, n * lh + 8, 10, BLACK_A((int)(bo * 220))); }
-  for (int d = 0; d < 8; d++) { float an = d * 0.785f, ox = cosf(an) * 2.2f, oy = sinf(an) * 2.2f; text_draw_wrapped(line, x + w / 2 + ox, ty + oy, maxW, 2, px, sfw, col_alpha(ol, 0.9f), 0, ALIGN_CENTER, lh); }
+  { const char *sv = store_get("subsShadow", "medium"); int sh = !strcmp(sv, "off") ? 0 : !strcmp(sv, "light") ? 1 : !strcmp(sv, "strong") ? 3 : 2; /* the shadow, as the player draws it */
+    if (sh > 0) { static const float D[4] = { 0, 2.0f, 3.5f, 5.0f }; static const int A[4] = { 0, 110, 150, 190 }; float d = D[sh] * px / 38.0f;
+      for (int k = 2; k >= 0; k--) { float o = d + k * 0.8f; text_draw_wrapped(line, x + w / 2 + o, ty + o, maxW, 2, px, sfw, BLACK_A(k ? A[sh] / (2 + k) : A[sh]), 0, ALIGN_CENTER, lh); } } }
+  if (strcmp(store_get("subsOutlineColor", "#000000"), "none")) /* (Outline Off: the letters alone) */
+    for (int d = 0; d < 8; d++) { float an = d * 0.785f, ox = cosf(an) * 2.2f, oy = sinf(an) * 2.2f; text_draw_wrapped(line, x + w / 2 + ox, ty + oy, maxW, 2, px, sfw, col_alpha(ol, 0.9f), 0, ALIGN_CENTER, lh); }
   text_draw_wrapped(line, x + w / 2, ty, maxW, 2, px, sfw, col, 0, ALIGN_CENTER, lh);
   gfx_offset_pop(); gfx_opacity_pop(); gfx_clip_pop();
   gfx_ring(x, y, w, h, 18, 1.5f, WHITE_A(40));

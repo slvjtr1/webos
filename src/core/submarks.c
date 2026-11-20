@@ -2,6 +2,23 @@
 #include <string.h>
 
 volatile int sub_marks_on = 1;
+volatile int sub_tashkeel_on = 0;
+
+/* the length in bytes of an Arabic vowel mark (tashkeel) at p, 0 when it is not one: the fathatan to the sukun
+   (U+064B-0652), the superscript alef (U+0670) and the Quranic annotation marks (U+0610-061A, U+06D6-06DC,
+   U+06DF-06E4, U+06E7-06E8, U+06EA-06ED). The letters, the hamza forms and the tatweel stay */
+static int tashkeel_len(const unsigned char *p) {
+  if (p[0] == 0xd9 && ((p[1] >= 0x8b && p[1] <= 0x92) || p[1] == 0xb0)) return 2;
+  if (p[0] == 0xd8 && p[1] >= 0x90 && p[1] <= 0x9a) return 2;
+  if (p[0] == 0xdb && ((p[1] >= 0x96 && p[1] <= 0x9c) || (p[1] >= 0x9f && p[1] <= 0xa4) || p[1] == 0xa7 || p[1] == 0xa8 || (p[1] >= 0xaa && p[1] <= 0xad))) return 2;
+  return 0;
+}
+void sub_tashkeel_clean(char *s) {
+  if (!s) return;
+  unsigned char *r = (unsigned char *)s, *w = r;
+  while (*r) { int n = tashkeel_len(r); if (n) { r += n; continue; } *w++ = *r++; }
+  *w = 0;
+}
 
 /* the length in bytes of the mark at p, 0 when it is not one */
 static int mark_len(const unsigned char *p) {
@@ -15,6 +32,7 @@ static int mark_len(const unsigned char *p) {
 
 void sub_marks_clean(char *s) {
   if (!s) return;
+  if (sub_tashkeel_on) sub_tashkeel_clean(s); /* (the option under it: the Arabic vowel marks too) */
   unsigned char *r = (unsigned char *)s, *w = r;
   while (*r) {
     int n = mark_len(r);

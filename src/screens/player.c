@@ -152,6 +152,7 @@ static struct {
   Stream st; int nSubAddons; char subLang[24]; unsigned ytTok;
   /* the addons' subtitles (the stream's own, then each subtitles addon's), apart from the built-in list in ext */
   SubEntry *adx; int nAdx, adxLoading, adxTry; double adxRetryAt; unsigned adxReq;
+  int listsAsked; double listsWantAt; /* the subtitle lists to download from: asked only when needed (subs_lists_load) */
   /* tray */ struct { int kind; /* 0 none 1 eps 2 src 3 aud 4 subs 5 epsrc */ char tabs[40][48]; int ntabs, tab, seasonList[40], season; int zone; /* 0 row 1 tabs 2 cols */ TItem row[MAXROW]; int n, idx, onBtn; TCol cols[4]; int ncols, c, r[4]; char title[300], epvid[SB_VID]; int backIdx, backTab; Mo open, openA; float ox, oy; Mo rowX, tabsX, colY[4], ringX, ringY, ringA, plY[4], plA[4]; float ringW, ringH; int loading; int armed; } tray;
   /* the sources tray's lists: one per addon serving the video (in the user's order), all asked as it opens; each stream
      read once as it comes (best_facts), the best fit for this TV among them all */
@@ -595,11 +596,13 @@ static void show_pref_aud(const char *lang, const char *name) {
   fprintf(stderr, "[audio] %s for this show\n", asSettings ? "as the settings say" : "kept");
 }
 static const char *aud_want(void) { const char *al = js_str(show_pref(), "al", NULL); if (al && *al) return al; return aud_setting(); }
+static void subs_lists_want(void);
 static void auto_sub(void) {
   if (P.autoSubDone || strcmp(P.curSub, "off")) return;
   const cJSON *sp = show_pref(); const char *pk = js_str(sp, "sk", ""), *pn = js_str(sp, "sn", "");
   if (!strcmp(pk, "off")) { P.autoSubDone = 1; return; } /* this show: none, as chosen */
   const char *w = *pk ? js_str(sp, "sl", "") : want_sub(); if (!*w) return;
+  if (!strcmp(pk, "ext") && !P.listsAsked) { subs_lists_want(); return; } /* this show's subtitle came from a list: the lists, once the film plays */
   again:;
   if (!strcmp(pk, "ext") && (P.nExt || P.nAdx)) { /* this show's file from an addon: the same addon first, the language */
     for (int pass = 0; pass < 2; pass++) { if (pass && (*pn ? P.adxLoading : P.extLoading) && !P.sameWaitOver) { if (!P.sameWaitAt) P.sameWaitAt = now_() + 10; return; } /* (any addon's file in that language only once the list that may hold the same addon's is in, or 10 s on) */
@@ -611,6 +614,7 @@ static void auto_sub(void) {
   for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (!fo || emb_forced(&P.emb[j])) && (em < 0 || (!fo && P.emb[em].forced && !P.emb[j].forced))) em = j;
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
+  if (!P.listsAsked) { subs_lists_want(); return; } /* none in the file: the lists, once the film plays (not while it opens) */
   for (int pass = 0; pass < 2; pass++) { /* the variant asked for first (Brazilian for Brazilian, European for European), then any */
     for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w) && (!fo || P.ext[i].forced) && (pass || variant_ok(P.ext[i].lang, w))) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
     for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w) && (!fo || P.adx[i].forced) && (pass || variant_ok(P.adx[i].lang, w))) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; } }
@@ -662,6 +666,19 @@ static void load_addon_subs(int n) { if (!P.type[0] || !P.vid[0] || P.isTrailer 
   SubEntry *own = NULL; int nown = sb_stream_subs(&P.st, &own);
   if (!P.nSubAddons && !nown) { free(own); return; } /* nobody to ask */
   P.adxLoading = 1; subs_find(&q, own, nown, on_adx, (void *)(uintptr_t)P.adxReq); free(own); }
+/* The lists of subtitles to download (OpenSubtitles, the subtitles addons'): asked only when they are needed, so a
+   source opens without them: when the subtitles open, or for a subtitle to choose by itself that the file's own
+   tracks don't have (then once the film plays steadily, or 20 s on). The file's own tracks are read as always */
+static void subs_lists_load(const char *why) {
+  if (P.listsAsked || P.isTrailer) return; P.listsAsked = 1; P.listsWantAt = 0;
+  fprintf(stderr, "[subs] the subtitle lists asked now (%s)\n", why);
+  load_ext_subs(0); load_addon_subs(0);
+}
+static void subs_lists_want(void) { if (!P.listsAsked && !P.listsWantAt) P.listsWantAt = now_(); }
+static void subs_lists_tick(void) {
+  if (P.listsAsked || !P.listsWantAt) return;
+  if ((P.steadyAt && now_() - P.steadyAt > 2 && video_state() == VID_PLAYING) || now_() - P.listsWantAt > 20) subs_lists_load("a subtitle to choose by itself");
+}
 /* the file's subtitle tracks: read from the stream itself when it is a Matroska file (named, styled, delayed like the
    others: listed as soon as its head is read, their lines follow); else the ones the TV's pipeline reports, which it
    draws itself (their numbers are the same: the order among the file's subtitle tracks). Asked every second until
@@ -1680,7 +1697,7 @@ static void open_tray(int kind) {
   if (kind != 2 && kind != 5) srcs_free(); else { mo_set(&SR.y, 0); mo_set(&SR.plA, 0); P.tray.tab = 0; SR.moved = 0; }
   P.mode = 2; memset(&P.tray.row, 0, sizeof P.tray.row); P.tray.kind = kind; P.tray.idx = -1; P.tray.zone = 0; P.tray.onBtn = 0; P.tray.n = 0; P.tray.ntabs = 0;
   if (kind == 1) P.tray.season = season_of(P.vid);
-  if (kind == 4) { load_emb_tracks(); P.tray.tab = subTab; P.tray.zone = 1; } /* the subtitles open on their tabs (kept when there are any) */
+  if (kind == 4) { subs_lists_load("the subtitles opened"); load_emb_tracks(); P.tray.tab = subTab; P.tray.zone = 1; } /* the subtitles open on their tabs (kept when there are any) */
   tm_reset(); TM.quiet = 1; render_tray(1); TM.quiet = 0;
   tray_origin();
   /* it starts small at its button and grows (the closing motion is set by the classes, see css()) */
@@ -1961,7 +1978,9 @@ static void start_video(void) {
   asssubs_close(); if (mkv) { prevspike_stop(); sp_close(); mkv_close(mkv); mkv = NULL; }
   if (!P.isHls && !P.isTrailer && !strncmp(P.url, "http", 4)) { mkvWantCues = prev_enabled() && !P.isP2p && sp_may_make(); /* (seek previews want the index even with no text track; never for a torrent on a TV) */
     mkv = mkv_open(P.url, P.startAt > 0 ? P.startAt : 0, P.isP2p); } /* not Matroska: it gives up after one small read */
-  load_ext_subs(0); load_addon_subs(0); load_emb_tracks();
+  P.nSubAddons = P.isTrailer || !P.type[0] ? 0 : subs_addons_for(P.type, P.vid); /* (how many could list some: the tray's tabs) */
+  if (castSubsN >= 0 || getenv("SB_PLAY_SUBS")) subs_lists_load("handed over"); /* (a phone's own list, nothing to fetch) */
+  load_emb_tracks(); /* the downloadable lists wait until they are needed (subs_lists_load) */
 }
 static char nextAlt[SB_URL_MAX];
 void player_fallback(const char *url) { snprintf(nextAlt, sizeof nextAlt, "%s", url ? url : ""); }
@@ -2328,12 +2347,14 @@ static int stalled(VidState vs) {
 }
 /* the viewer notice, asked as the picture comes (a trailer has none): IMDb's Parents Guide votes read as an age
    (any severe 16+, three severe 18+, moderate 13+, mild only 7+) and the reasons with how much; when the guide has
-   nothing (or cannot be reached), the official rating's age alone (TMDB). Nothing usable within 5 s: no notice. */
+   nothing (or cannot be reached), the official rating's age alone (TMDB). Shown 6 s as the film starts when known within
+   5 s, and whenever the film is paused with the controls up (known later: only then). */
 static void pg_decide(void) {
-  if (P.pg.at || !P.pg.asked || now_() - P.pg.askAt > 5) return; /* (shown once; never late) */
+  if (P.pg.at || !P.pg.asked) return; /* (decided once) */
+  int late = now_() - P.pg.askAt > 5; /* (known late: not shown as the film starts, only with the pause) */
   if (P.pg.guideIn && P.pg.g.n) { int sev = 0, mod = 0; for (int i = 0; i < P.pg.g.n; i++) { sev += P.pg.g.lvl[i] == PG_SEVERE; mod += P.pg.g.lvl[i] == PG_MODERATE; }
-    P.pg.age = sev >= 3 ? 18 : sev ? 16 : mod ? 13 : 7; P.pg.at = now_(); return; }
-  if (P.pg.guideIn && P.pg.certIn && P.pg.certAge >= 0) { P.pg.age = P.pg.certAge; P.pg.at = now_(); } /* (the age alone, no reasons) */
+    P.pg.age = sev >= 3 ? 18 : sev ? 16 : mod ? 13 : 7; P.pg.at = late ? now_() - 60 : now_(); return; }
+  if (P.pg.guideIn && P.pg.certIn && P.pg.certAge >= 0) { P.pg.age = P.pg.certAge; P.pg.at = late ? now_() - 60 : now_(); } /* (the age alone, no reasons) */
 }
 static void on_pg(const ParGuide *g, void *ud) { if (!P.open || P.closing || (unsigned)(uintptr_t)ud != P.pg.sess) return; if (g) P.pg.g = *g; P.pg.guideIn = 1; fprintf(stderr, "[notice] guide: %d reasons\n", g ? g->n : -1); pg_decide(); }
 static void on_age(const Rating *r, void *ud) { if (!P.open || P.closing || (unsigned)(uintptr_t)ud != P.pg.sess) return; P.pg.certAge = rating_age(r); P.pg.certIn = 1; snprintf(P.pg.cert, sizeof P.pg.cert, "%s", r ? r->rating : ""); P.pg.desc[0] = 0; for (int i = 0; r && i < r->ndesc && i < 3; i++) { size_t l = strlen(P.pg.desc); snprintf(P.pg.desc + l, sizeof P.pg.desc - l, "%s%s", l ? ", " : "", r->desc[i]); } /* (the rating's own reasons, when it gives them) */ fprintf(stderr, "[notice] rating \"%s\" -> age %d\n", r ? r->rating : "", P.pg.certAge); pg_decide(); }
@@ -2368,7 +2389,7 @@ static void css(void) {
   { float rest = SB_H * pos_pct() / 100.0f; mo_to(&P.subB, tr ? SB_H * 0.62f : P.osd ? fmaxf(420, rest) : P.skm ? fmaxf(200, rest) : rest, P.mode == 5 ? .16f : .3f, C_EASE, 0); } /* (the chosen height, never under the controls) */
   mo_to(&P.hvA, P.hvOn ? 1 : 0, .15f, C_EASE, 0); mo_to(&P.ccS, strcmp(P.curSub, "off") ? 0 : 1, .26f, C_OUT, 0);
   mo_to(&P.p2pA, P.isP2p && P.p2pLine[0] && osd ? 1 : 0, .3f, C_EASE, 0);
-  { int on = P.pg.at > 0 && now_() - P.pg.at < 6.0; /* 6 s from when it comes, controls or not, then it fades; once only */
+  { int on = P.pg.at > 0 && (now_() - P.pg.at < 6.0 || (P.pausedShown && osd && !tr)); /* 6 s as the film starts, then again whenever it is paused with the controls up, in the same place */
     mo_to(&P.pgA, on ? 1 : 0, on ? .5f : .55f, C_EASE, 0); mo_to(&P.pgY, on ? 0 : -14, on ? .6f : .55f, C_OUT, 0); }
   if (P.tray.kind > 0) { mo_to(&P.tray.open, 1, .38f, C_TRIN, 0); mo_to(&P.tray.openA, 1, .18f, C_EASE, 0); }
   else { mo_to(&P.tray.open, .12f, .26f, C_TROUT, 0); mo_to(&P.tray.openA, 0, .2f, C_EASE, .04f); }
@@ -2485,6 +2506,7 @@ void player_tick(float dt) {
   if (P.metaRetryAt && now_() >= P.metaRetryAt) { P.metaRetryAt = 0; if (!P.next.has || !P.videos) ask_meta(); }
   if (P.extRetryAt && now_() >= P.extRetryAt) { P.extRetryAt = 0; load_ext_subs(P.extTry + 1); }
   if (P.adxRetryAt && now_() >= P.adxRetryAt) { P.adxRetryAt = 0; load_addon_subs(P.adxTry + 1); }
+  subs_lists_tick();
   if (P.embWaitAt && !P.embWaitOver && now_() >= P.embWaitAt) { P.embWaitOver = 1; auto_sub(); }
   if (P.sameWaitAt && !P.sameWaitOver && now_() >= P.sameWaitAt) { P.sameWaitOver = 1; auto_sub(); }
   sub_check(); ass_sync();
@@ -2618,10 +2640,10 @@ static void draw_art(void) {
   gfx_opacity_pop();
 }
 /* the subtitle style, read once while the settings stay as they are */
-typedef struct { unsigned ser; int px; uint32_t col, ol; float bo; int sh; } SubStyle;
+typedef struct { unsigned ser; int px; uint32_t col, ol; float bo; int sh, olOn; } SubStyle;
 static const SubStyle *sub_style(void) {
   static SubStyle st; if (st.ser == store_serial() && st.ser) return &st;
-  st.ser = store_serial(); st.px = (int)(38 * SUB_SIZES[size_idx()] / 100.0f + 0.5f); st.col = hexcol(store_get("subsColor", "#ffffff")); st.ol = hexcol(store_get("subsOutlineColor", "#000000")); st.bo = (float)atof(SUB_BGS[bg_idx()]);
+  st.ser = store_serial(); st.px = (int)(38 * SUB_SIZES[size_idx()] / 100.0f + 0.5f); st.col = hexcol(store_get("subsColor", "#ffffff")); st.ol = hexcol(store_get("subsOutlineColor", "#000000")); st.olOn = strcmp(store_get("subsOutlineColor", "#000000"), "none") != 0; if (!st.olOn) st.ol = 0xff000000u; st.bo = (float)atof(SUB_BGS[bg_idx()]);
   { float k = atoi(SUB_BRIGHT[bright_idx()]) / 100.0f; st.col = col_dim(st.col, k); st.ol = col_dim(st.ol, k); asssubs_brightness(k); }
   { const char *v = store_get("subsShadow", "medium"); st.sh = !strcmp(v, "off") ? 0 : !strcmp(v, "light") ? 1 : !strcmp(v, "strong") ? 3 : 2; } /* (the brightness: plain, embedded and styled lines alike) */
   return &st;
@@ -2647,7 +2669,7 @@ static void sub_glyphs(const char *s, float x, float y, int px, uint32_t col, ui
   int sh = sub_style()->sh;
   if (sh > 0) { static const float D[4] = { 0, 2.0f, 3.5f, 5.0f }; static const int A[4] = { 0, 110, 150, 190 }; float d = D[sh] * px / 38.0f; int a = (int)(A[sh] * (col >> 24) / 255);
     for (int k = 2; k >= 0; k--) { float o = d + k * 0.8f; text_draw(s, x + o, y + o, px, subw(), BLACK_A(k ? a / (2 + k) : a), 0, 0, align); } }
-  for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(s, x + ox[d], y + oy[d], px, subw(), ol, 0, 0, align); }
+  if (sub_style()->olOn) for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(s, x + ox[d], y + oy[d], px, subw(), ol, 0, 0, align); } /* (Outline Off: none) */
   text_draw(s, x, y, px, subw(), col, 0, 0, align);
 }
 static void draw_mkv_line(const MkvLine *l, float bx, float by, int px, uint32_t col, uint32_t ol, float bo, int align) {
@@ -2813,7 +2835,7 @@ static void draw_osd(void) {
   if (P.bufA.v > 0.001f) { gfx_opacity_push(P.bufA.v); float cx = W / 2, cy = H / 2 - 62 + 40; gfx_ring(cx - 40, cy - 40, 80, 80, 40, 5, WHITE_A(36));
     float ph = clock_ph(0.9) * 6.2832f; for (int i = 0; i <= 20; i++) { float an = ph - 2.356f + 1.5708f * i / 20; gfx_circle(cx + cosf(an) * 37.5f, cy + sinf(an) * 37.5f, 2.5f, ACC2); }
     xline_draw(&stX[1], status, cx, cy + 40 + 22, 24, WHITE_A(204), 0, ALIGN_CENTER); gfx_opacity_pop(); }
-  /* top left, as the film starts, for 6 s (under the peers chip while the controls show it): one glass pill like the peers chip, the age in a small
+  /* top left, as the film starts for 6 s and again while paused (under the peers chip while the controls show it): one glass pill like the peers chip, the age in a small
      accent badge, then what for, each with three small dots for how much; the reasons come in one after the other */
   if (P.pgA.v > 0.001f) { float x = 72 + P.pgY.v, y = 52 + (46 + 14) * P.p2pA.v, h = 52, t = (float)(now_() - P.pg.at); char ag[40]; if (P.pg.age > 0) snprintf(ag, sizeof ag, "%d+", P.pg.age); else snprintf(ag, sizeof ag, "%s", T("All ages"));
     static float nw[PG_CATS]; static unsigned lg; if (lg != i18n_gen() || !nw[0]) { lg = i18n_gen(); for (int c = 0; c < PG_CATS; c++) nw[c] = text_width(parental_cat_name(c), 22, 600, 0); }

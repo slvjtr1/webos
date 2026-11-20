@@ -1,41 +1,26 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.8",
   "items": [
     {
-      "icon": "wn_av",
-      "title": "Anime and film upscale",
-      "text": "The TV's own picture processors tuned from D to A while you watch. No root needed."
-    },
-    {
-      "icon": "wn_new",
-      "title": "Clean sources",
-      "text": "Fakes, other episodes and other titles left out, checked against the title, season and episode."
-    },
-    {
       "icon": "wn_opts",
-      "title": "Faster start",
-      "text": "The best stream is picked sooner, and films start without waiting for their previews."
-    },
-    {
-      "icon": "wn_live",
-      "title": "I use debrid",
-      "text": "Remuxes and high bitrates picked freely for debrid users."
+      "title": "Sources open faster",
+      "text": "Subtitles to download are looked up only when you open Subtitles, or when the film has none in your language."
     },
     {
       "icon": "wn_subs",
-      "title": "Cleaner subtitles",
-      "text": "A soft drop shadow you can set, and ( ) and quotation marks taken out."
+      "title": "Subtitle outline",
+      "text": "The outline can be switched off, with the shadow set right under it."
     },
     {
-      "icon": "wn_lib",
-      "title": "Sound for this TV",
-      "text": "Clear dialogue on the TV's speakers, the full mix for a soundbar, DTS as stereo or 5.1."
+      "icon": "wn_new",
+      "title": "Remove Arabic diacritics",
+      "text": "Under Clean subtitle marks: the vowel marks taken out of Arabic lines, the letters stay."
     },
     {
-      "icon": "collection",
-      "title": "Beta updates",
-      "text": "Try new versions early from Settings > About. Off by default."
+      "icon": "wn_av",
+      "title": "Viewer notice on pause",
+      "text": "The age and what for show again whenever you pause, in the same corner."
     },
-    "Faster, lighter and steadier everywhere."
+    "I use debrid now shows only while the best stream plays by itself."
   ]
 }

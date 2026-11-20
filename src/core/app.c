@@ -968,7 +968,7 @@ void app_tick_behind(float dt) {
 }
 void app_tick(float dt) {
   DT = dt; NOW = SDL_GetTicks() / 1000.0; FRAME++; away_tick();
-  tvtune_tick(); { static unsigned ser; if (store_serial() != ser) { ser = store_serial(); sub_marks_on = strcmp(store_get("subsCleanMarks", "true"), "false") != 0; } }
+  tvtune_tick(); { static unsigned ser; if (store_serial() != ser) { ser = store_serial(); sub_marks_on = strcmp(store_get("subsCleanMarks", "true"), "false") != 0; sub_tashkeel_on = !strcmp(store_get("subsCleanTashkeel", "false"), "true"); } }
   ptr_idle();
   ptr_frame();
   { static int swelled; if (app_hold_progress() > 0 && !swelled) { swelled = 1; sound_play(SND_HOLD); } else if (!okHold.down) swelled = 0; } /* holding OK: a low swell as the line starts round */
