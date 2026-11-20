@@ -70,10 +70,32 @@ unsigned update_serial(void) { return U.serial; }
 
 static void pill_show(void);
 static double nextAt; static int forceCheck, pillPend; /* the next check while the app stays open; a check that skips the 6-hour rest; a notice that waits for the film to end */
-static int reached; /* the release list or the listing answered: finding nothing for this package then means nothing newer */
+static int reached; /* a source said enough to know (a release list read, or a manifest naming this app's package): finding nothing newer then means up to date */
 static int lastSt; /* the list's HTTP answer (0: none), for the log when it could not be read */
+/* every check has a number; a reply carries it, and one from an earlier check (Beta updates switched while it was out)
+   is dropped: it can never bring back an offer the switch took away */
+static unsigned chkGen;
+static double retryAt; /* a broken-off install tried again then */
+#define UD(manual, stage) ((void *)(((size_t)(chkGen & 0x3fffffffu) << 2) | (size_t)(stage) << 1 | (size_t)(manual)))
+#define UD_MANUAL(u) ((int)((size_t)(u) & 1))
+#define UD_STAGE(u) ((int)((size_t)(u) >> 1 & 1))
+#define UD_STALE(u) (((size_t)(u) >> 2) != (size_t)(chkGen & 0x3fffffffu))
+static void pill_hide(void);
+static void relaunch_cancel(void);
+/* a beta offered while Beta updates is off: taken back, its notice with it (an install already handed to the Channel
+   is its own: not touched) */
+static int beta_withdraw(void) {
+  if (!U.has || !U.avail.beta || update_beta()) return 0;
+  fprintf(stderr, "[update] Beta updates is off: the beta %s is no longer offered\n", U.avail.ver);
+  U.has = 0; memset(&U.avail, 0, sizeof U.avail); store_remove("updVer"); pillPend = 0; if (!U.job) retryAt = 0;
+  if (U.pill && U.kind == 0) { U.pf = 0; pill_hide(); }
+  if (U.state == UPD_AVAIL || (U.state == UPD_INSTALLING && !U.job)) U.state = UPD_IDLE;
+  U.msg[0] = 0; changed();
+  return 1;
+}
 static void done(const Rel *best, int manual) {
   char at[32]; snprintf(at, sizeof at, "%.0f", now_ms()); store_set("updAt", at);
+  if (best && best->beta && !update_beta()) best = NULL; /* (never a beta without Beta updates) */
   if (best && U.cur[0] && ver_cmp(best->ver, U.cur) > 0) {
     U.avail = *best; U.has = 1; U.state = UPD_AVAIL; store_set("updVer", best->ver);
     fprintf(stderr, "[update] %s%s available (running %s)\n", best->ver, best->beta ? " (beta)" : "", U.cur);
@@ -93,20 +115,22 @@ static Rel fbBeta; static int fbBetaHas;
 static void on_manifest(int st, const unsigned char *body, size_t len, void *ud);
 static void fetch_manifest(int manual, int stage) {
   const char *mf = getenv(stage ? "SB_UPD_MAN" : "SB_UPD_MAN_BETA"); /* (development: other manifests) */
-  net_get_timeout(mf ? mf : stage ? UPD_MAN : UPD_MAN_BETA, 15000, on_manifest, (void *)(size_t)(manual | stage << 1));
+  net_get_timeout(mf ? mf : stage ? UPD_MAN : UPD_MAN_BETA, 15000, on_manifest, UD(manual, stage));
 }
 static void on_manifest(int st, const unsigned char *body, size_t len, void *ud) {
-  (void)len; int manual = (int)(size_t)ud & 1, stage = (int)(size_t)ud >> 1; lastSt = st;
+  if (UD_STALE(ud)) { fprintf(stderr, "[update] an earlier check's reply: dropped\n"); return; }
+  int manual = UD_MANUAL(ud), stage = UD_STAGE(ud); lastSt = st;
   char *txt = NULL; if (st == 200 && body) { txt = malloc(len + 1); if (txt) { memcpy(txt, body, len); txt[len] = 0; } }
-  { cJSON *m = txt ? cJSON_Parse(txt) : NULL; if (cJSON_IsObject(m)) reached = 1; cJSON_Delete(m); }
   Rel r; int had = txt != NULL, ok = had && upd_from_manifest(SB_APP_ID, txt, !stage, &r); free(txt);
   if (had && !ok) fprintf(stderr, "[update] the %s manifest does not name this app's package: not used\n", stage ? "stable" : "beta");
-  if (!stage) { fbBetaHas = ok; if (ok) fbBeta = r; fetch_manifest(manual, 1); return; }
+  if (ok && stage) reached = 1; /* (only a usable stable manifest says what is current: an empty or foreign one says nothing) */
+  if (!stage) { fbBetaHas = ok && update_beta(); if (ok) fbBeta = r; fetch_manifest(manual, 1); return; }
   const Rel *best = upd_newer(ok ? &r : NULL, fbBetaHas ? &fbBeta : NULL); fbBetaHas = 0;
   done(best, manual);
 }
 static void on_releases(int st, const unsigned char *body, size_t len, void *ud) {
-  int manual = (int)(size_t)ud; lastSt = st;
+  if (UD_STALE(ud)) { fprintf(stderr, "[update] an earlier check's reply: dropped\n"); return; }
+  int manual = UD_MANUAL(ud); lastSt = st;
   char *txt = NULL; if (st == 200 && body) { txt = malloc(len + 1); if (txt) { memcpy(txt, body, len); txt[len] = 0; } }
   Rel best; int res = upd_from_releases(SB_APP_ID, txt, update_beta(), &best); free(txt);
   reached = res >= 0;
@@ -119,12 +143,13 @@ void update_check(int manual) {
   const char *gh = getenv("SB_UPD_GH"); /* development: another release list (a local server) */
   if (!manual && !forceCheck && !gh && now_ms() - atof(store_get("updAt", "0")) < 6 * 3600000.0 && !*store_get("updVer", "")) { U.state = UPD_IDLE; return; }
   U.state = UPD_CHECKING; U.msg[0] = 0; changed();
-  net_get_timeout(gh ? gh : UPD_GH, 15000, on_releases, (void *)(size_t)manual);
+  chkGen++; reached = 0; fbBetaHas = 0;
+  net_get_timeout(gh ? gh : UPD_GH, 15000, on_releases, UD(manual, 0));
 }
 
 /* ---- install ---- */
 static char waitPath[1200], shPath[1200];
-static int retries; static double retryAt; static int rooted = -1; /* the Channel runs commands as root here (1), not (0), not known (-1) */
+static int retries; static int rooted = -1; /* the Channel runs commands as root here (1), not (0), not known (-1) */
 static void install_go(void);
 static void relaunch_cancel(void) { if (waitPath[0]) unlink(waitPath); if (shPath[0]) unlink(shPath); }
 /* the Channel runs this as root, apart from the app: once appinfo.json shows the new version (at most 5 min), the app opens again */
@@ -170,6 +195,7 @@ static void on_install(const char *payload, void *ud) {
 }
 void update_install(void) {
   if (app_now() - U.openAt < 0.9) return; /* the OK that opened this page */
+  if (U.has && beta_withdraw()) { update_check(1); return; } /* (switched off since the offer came) */
   if (!U.has) { update_check(1); return; }
   if (U.state == UPD_INSTALLING) return;
   U.state = UPD_INSTALLING; snprintf(U.msg, sizeof U.msg, "%s", T("Downloading…")); changed();
@@ -178,6 +204,10 @@ void update_install(void) {
   install_go();
 }
 static void install_go(void) {
+  if (!U.has || (U.avail.beta && !update_beta())) { /* (a retry of a beta after Beta updates went off: not sent) */
+    fprintf(stderr, "[update] install not sent: the offer is gone\n"); retryAt = 0; relaunch_cancel();
+    if (U.state == UPD_INSTALLING) U.state = UPD_IDLE;
+    beta_withdraw(); changed(); return; }
   cJSON *p = cJSON_CreateObject(); cJSON_AddStringToObject(p, "ipkUrl", U.avail.url); cJSON_AddStringToObject(p, "ipkHash", U.avail.sha); cJSON_AddStringToObject(p, "id", SB_APP_ID); cJSON_AddTrueToObject(p, "subscribe");
   char *ps = cJSON_PrintUnformatted(p); cJSON_Delete(p);
   U.job = plat_luna_subscribe("luna://org.webosbrew.hbchannel.service/install", ps, on_install, NULL); free(ps);
@@ -276,7 +306,13 @@ void update_tick(float dt) {
   else if (U.started && nextAt && app_now() >= nextAt && !player_open() && app_idle() > 1 && U.state != UPD_CHECKING && U.state != UPD_INSTALLING) { nextAt = app_now() + 6 * 3600; forceCheck = 1; update_check(0); forceCheck = 0; }
   if (pillPend && !player_open() && !U.pill && U.pa.v <= 0.001f) { pillPend = 0; pill_show(); }
   if (retryAt && app_now() >= retryAt) { retryAt = 0; if (U.state == UPD_INSTALLING && !U.job) install_go(); } /* (a broken-off download, again) */
-  { static int beta = -1; int b = update_beta(); if (beta >= 0 && b != beta && U.state != UPD_CHECKING && U.state != UPD_INSTALLING) { forceCheck = 1; update_check(0); forceCheck = 0; } beta = b; } /* (Beta updates switched: looked again at once) */
+  { static int beta = -1; int b = update_beta();
+    if (beta >= 0 && b != beta) { /* Beta updates switched: a beta offer goes (off), a check under way is dropped, and it looks again at once */
+      if (!b) { beta_withdraw(); if (U.state == UPD_INSTALLING && !U.job) { retryAt = 0; relaunch_cancel(); U.state = UPD_IDLE; changed(); } }
+      if (U.state == UPD_CHECKING) { chkGen++; U.state = UPD_IDLE; }
+      if (U.state == UPD_INSTALLING) fprintf(stderr, "[update] Beta updates switched while the Channel installs %s: that install goes on\n", U.avail.ver);
+      else { forceCheck = 1; update_check(0); forceCheck = 0; } }
+    beta = b; }
   { static int autoI = -1; if (autoI < 0) autoI = getenv("SB_UPD_AUTOINSTALL") != NULL; /* development: Install pressed 3 s after the notice (the whole update, untouched) */
     if (autoI && U.has && U.state == UPD_AVAIL && U.shown && app_now() - U.shownAt > 3) { autoI = 0; U.openAt = 0; update_install(); } }
 }

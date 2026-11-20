@@ -27,6 +27,17 @@ char *plat_luna_call(const char *uri, const char *payload, int timeoutMs); /* (t
 #define JOURNAL "tvTuneSaved.json"   /* { category: { key: the TV's value before } }: every value changed and not yet put back */
 #define MAXW 24
 
+/* a write's outcome: the TV said yes, it said no, or no reply came (it may have made it: luna gives up after its
+   timeout, the TV may still apply the write) */
+enum { WR_NO = 0, WR_OK = 1, WR_UNK = -1 };
+#ifdef TVTUNE_TEST
+extern int tvtune_fault; /* tests/tvtune: 1 the file write, 2 the folder's open, 3 the folder's sync, 4 every record entry, 5 the second record entry */
+static int faultN;
+#define FAULT(n) (tvtune_fault == (n))
+#else
+#define FAULT(n) 0
+#endif
+
 /* How it stays safe:
    - One worker does every call to the TV and every write of the record, one pass at a time (opMu). The main thread
      only says what it wants (a title playing with a level, or nothing) and the worker brings the TV to it.
@@ -61,63 +72,116 @@ const char *tvtune_level(int anime) {
 /* ---- one call to the settings service, by the route that works on this TV ---- */
 /* only letters, digits and a few marks go into a shell command: nothing can leave its quotes */
 static int clean(const char *s) { for (; *s; s++) { char c = *s; if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("_-.:,{}[]\" ", c))) return 0; } return 1; }
-static cJSON *via_channel(const char *uri, const char *payload) {
-  if (!clean(payload)) return NULL;
+/* *sent: 0 when nothing went out (then NULL, and nothing was done) */
+static cJSON *via_channel(const char *uri, const char *payload, int *sent) {
+  *sent = 0; if (!clean(payload)) return NULL;
   char cmd[1600]; snprintf(cmd, sizeof cmd, "luna-send -n 1 -f %s '%s'", uri, payload);
-  cJSON *p = cJSON_CreateObject(); cJSON_AddStringToObject(p, "command", cmd); char *ps = cJSON_PrintUnformatted(p); cJSON_Delete(p);
-  char *r = ps ? plat_luna_call(EXEC, ps, 4000) : NULL; free(ps); if (!r) return NULL;
+  cJSON *p = cJSON_CreateObject(); if (!p || !cJSON_AddStringToObject(p, "command", cmd)) { cJSON_Delete(p); return NULL; }
+  char *ps = cJSON_PrintUnformatted(p); cJSON_Delete(p); if (!ps) return NULL;
+  *sent = 1;
+  char *r = plat_luna_call(EXEC, ps, 4000); free(ps); if (!r) return NULL;
   cJSON *j = cJSON_Parse(r); free(r); if (!j) return NULL;
   cJSON *rv = cJSON_GetObjectItemCaseSensitive(j, "returnValue"), *out = cJSON_GetObjectItemCaseSensitive(j, "stdoutString");
-  cJSON *o = cJSON_IsTrue(rv) && cJSON_IsString(out) ? cJSON_Parse(out->valuestring) : NULL; cJSON_Delete(j); return o;
+  cJSON *o = cJSON_IsTrue(rv) && cJSON_IsString(out) ? cJSON_Parse(out->valuestring) : NULL; cJSON_Delete(j); return o; /* (the command's own reply not read: not known) */
 }
-static cJSON *direct(const char *uri, const char *payload) { char *r = plat_luna_call(uri, payload, 3000); if (!r) return NULL; cJSON *j = cJSON_Parse(r); free(r); return j; }
+static cJSON *direct(const char *uri, const char *payload, int *sent) { *sent = 1; char *r = plat_luna_call(uri, payload, 3000); if (!r) return NULL; cJSON *j = cJSON_Parse(r); free(r); return j; }
 static int ok_of(const cJSON *o) { return o && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o, "returnValue")); }
-/* the route is found with a read (a refused write says nothing about access: the TV refuses keys it lacks). No
-   answer at all leaves it unknown, to be found again at the next call */
+/* the route is found with a read (a refused write says nothing about access: the TV refuses keys it lacks). A clear
+   refusal of both routes is final for the session (route 2); no reply leaves it unknown, and it is asked once a pass
+   at most (routeTried): one title's outage costs one probe, never one per call or per frame */
+static int routeTried;
 static int find_route(void) {
   if (route >= 0) return route;
+  if (routeTried) return -1;
+  routeTried = 1;
   static const char *const PROBE = "{\"category\":\"picture\",\"keys\":[\"pictureMode\"]}";
-  cJSON *o = direct(GET, PROBE); int found = -1, answered = o != NULL;
+  int s; cJSON *o = direct(GET, PROBE, &s); int found = -1, answered = o != NULL;
   if (ok_of(o)) found = 0;
-  else { cJSON *c = via_channel(GET, PROBE); if (ok_of(c)) found = 1; else if (answered || c) found = 2; cJSON_Delete(c); }
+  else { cJSON *c = via_channel(GET, PROBE, &s); if (ok_of(c)) found = 1; else if (answered && !c) found = 2; cJSON_Delete(c); }
   cJSON_Delete(o);
   if (found >= 0) { route = found; fprintf(stderr, "[tvtune] the TV's settings: %s\n", found == 0 ? "the app may change them itself" : found == 1 ? "through the Homebrew Channel (root)" : "not open to the app on this TV"); }
+  else fprintf(stderr, "[tvtune] the TV's settings service did not answer: asked again with the next title\n");
   return found;
 }
-static cJSON *call(const char *uri, const char *payload) {
+static cJSON *call(const char *uri, const char *payload, int *sent) {
   int r = find_route();
-  return r == 0 ? direct(uri, payload) : r == 1 ? via_channel(uri, payload) : NULL;
+  if (r == 0) return direct(uri, payload, sent);
+  if (r == 1) return via_channel(uri, payload, sent);
+  *sent = 0; return NULL;
 }
+static int write_call(const char *pl) { int sent; cJSON *o = call(SET, pl, &sent); int r = !sent ? WR_NO : !o ? WR_UNK : ok_of(o) ? WR_OK : WR_NO; cJSON_Delete(o); return r; }
+static int write_one(const char *cat, const char *k, const char *v) {
+  char pl[600]; if (snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"settings\":{\"%s\":\"%s\"}}", cat, k, v) >= (int)sizeof pl) return WR_NO;
+  return write_call(pl);
+}
+/* the TV's own values of these keys, read after a write without reply; NULL when the read got no reply either */
+static cJSON *read_keys(const char *cat, const cJSON *keys) {
+  char pl[1000]; int n = snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"keys\":[", cat), k = 0; const cJSON *x;
+  cJSON_ArrayForEach(x, keys) if (n < (int)sizeof pl - 60) n += snprintf(pl + n, sizeof pl - n, "%s\"%s\"", k++ ? "," : "", x->string);
+  snprintf(pl + n, sizeof pl - n, "]}");
+  int s; cJSON *o = call(GET, pl, &s); cJSON *st = ok_of(o) ? cJSON_DetachItemFromObjectCaseSensitive(o, "settings") : NULL; cJSON_Delete(o);
+  if (st && !cJSON_IsObject(st)) { cJSON_Delete(st); st = NULL; }
+  return st;
+}
+static int is_choice(const char *list, const char *v) { size_t n = strlen(v); for (const char *p = list; *p;) { size_t l = strcspn(p, "|"); if (l == n && !strncmp(p, v, n)) return 1; p += l; if (*p) p++; } return 0; }
+static void mark(cJSON *set, const char *k) { if (set && !cJSON_GetObjectItemCaseSensitive(set, k)) cJSON_AddStringToObject(set, k, ""); }
+static const char *str_of(const cJSON *o, const char *k) { const cJSON *v = o ? cJSON_GetObjectItemCaseSensitive(o, k) : NULL; return cJSON_IsString(v) ? v->valuestring : NULL; }
 
-static int set_one(const char *cat, const char *k, const char *v) {
-  char pl[600]; snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"settings\":{\"%s\":\"%s\"}}", cat, k, v);
-  cJSON *o = call(SET, pl); int ok = ok_of(o); cJSON_Delete(o); return ok;
-}
-static int set_cat(const char *cat, const cJSON *settings) {
-  char *js = cJSON_PrintUnformatted(settings); if (!js) return 0;
-  char pl[1400]; int n = snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"settings\":%s}", cat, js); free(js);
-  if (n >= (int)sizeof pl) return 0; /* (too long: key by key) */
-  cJSON *o = call(SET, pl); int ok = ok_of(o); cJSON_Delete(o); return ok;
-}
-/* a whole category at once; refused, each key alone, and for a key with choices each choice in turn (a key this model
-   lacks never stops the others). took: every key the TV took, with the value it took. Returns how many */
-static int set_keys(const char *cat, const cJSON *settings, cJSON *took) {
-  int n = 0; const cJSON *x;
-  if (!cJSON_GetArraySize(settings)) return 0;
-  int plain = 1; cJSON_ArrayForEach(x, settings) if (!cJSON_IsString(x) || strchr(x->valuestring, '|')) plain = 0;
-  if (plain && cJSON_GetArraySize(settings) > 1 && set_cat(cat, settings)) { cJSON_ArrayForEach(x, settings) { cJSON_AddStringToObject(took, x->string, x->valuestring); n++; } return n; }
-  cJSON_ArrayForEach(x, settings) {
-    if (!cJSON_IsString(x)) continue;
-    char ch[160]; snprintf(ch, sizeof ch, "%s", x->valuestring); int ok = 0; char *save = NULL;
-    for (char *c = strtok_r(ch, "|", &save); c && !ok; c = strtok_r(NULL, "|", &save)) if (set_one(cat, x->string, c)) { ok = 1; n++; cJSON_AddStringToObject(took, x->string, c); }
-    if (!ok) fprintf(stderr, "[tvtune] %s.%s not taken by this TV\n", cat, x->string); }
-  return n;
+/* Writes want (key -> "a|b|c", the first the TV takes) in category cat: the whole category at once, refused, each key
+   alone, and for a key with choices each choice in turn (a key this model lacks never stops the others).
+   before: the TV's values before (tuning), or NULL (putting back: writing the value before again is always safe).
+   took: the keys confirmed at a value, with it. unk: the keys a write without reply may have changed, that no reply
+   or read settled; they stay in the record. A write without reply makes its key uncertain for the rest of the call:
+   only a confirmed value settles it, a refusal after it does not. After a lost reply the key is read back: one of the
+   asked values means the TV took it (no further choice is written over it); its value before means the next choice
+   may be tried; anything else is left alone. Returns -1 when a read got no reply either (the service is not
+   answering: nothing more this pass), else how many keys were taken */
+static int set_keys(const char *cat, const cJSON *want, const cJSON *before, cJSON *took, cJSON *unk) {
+  const cJSON *x; int n = 0, stop = 0;
+  cJSON *todo = cJSON_CreateObject(); if (!todo) return -1;
+  cJSON_ArrayForEach(x, want) if (cJSON_IsString(x) && !cJSON_AddStringToObject(todo, x->string, x->valuestring)) { cJSON_Delete(todo); return -1; }
+  int nk = cJSON_GetArraySize(todo), plain = 1; cJSON_ArrayForEach(x, todo) if (strchr(x->valuestring, '|')) plain = 0;
+  if (!nk) { cJSON_Delete(todo); return 0; }
+  if (plain && nk > 1) {
+    char *js = cJSON_PrintUnformatted(todo), pl[1400]; int len = js ? snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"settings\":%s}", cat, js) : (int)sizeof pl; free(js);
+    int r = len < (int)sizeof pl ? write_call(pl) : WR_NO; /* (too long: key by key) */
+    if (r == WR_OK) { cJSON_ArrayForEach(x, todo) { cJSON_AddStringToObject(took, x->string, x->valuestring); n++; } cJSON_Delete(todo); return n; }
+    if (r == WR_UNK) {
+      cJSON *now = read_keys(cat, todo);
+      if (!now) { cJSON_ArrayForEach(x, todo) mark(unk, x->string); cJSON_Delete(todo); fprintf(stderr, "[tvtune] %s: no reply to the write nor to the read: kept as not known\n", cat); return -1; }
+      cJSON *nx; for (cJSON *y = todo->child; y; y = nx) { nx = y->next;
+        const char *v = str_of(now, y->string), *b = str_of(before, y->string);
+        if (v && !strcmp(v, y->valuestring)) { cJSON_AddStringToObject(took, y->string, v); n++; cJSON_DeleteItemFromObjectCaseSensitive(todo, y->string); continue; }
+        mark(unk, y->string);
+        if (before && !(v && b && !strcmp(v, b))) cJSON_DeleteItemFromObjectCaseSensitive(todo, y->string); } /* (changed to something else: left alone) */
+      cJSON_Delete(now);
+    }
+  }
+  cJSON_ArrayForEach(x, todo) {
+    if (stop) break;
+    char ch[160]; snprintf(ch, sizeof ch, "%s", x->valuestring); char *save = NULL; int done = 0;
+    for (char *c = strtok_r(ch, "|", &save); c && !done; c = strtok_r(NULL, "|", &save)) {
+      int r = write_one(cat, x->string, c);
+      if (r == WR_OK) { cJSON_AddStringToObject(took, x->string, c); n++; done = 1; }
+      else if (r == WR_UNK) {
+        mark(unk, x->string);
+        cJSON *one = cJSON_CreateObject(); cJSON *now = one && cJSON_AddStringToObject(one, x->string, "") ? read_keys(cat, one) : NULL; cJSON_Delete(one);
+        const char *v = str_of(now, x->string), *b = str_of(before, x->string);
+        if (!now) { stop = done = 1; }
+        else if (v && is_choice(x->valuestring, v)) { cJSON_AddStringToObject(took, x->string, v); n++; done = 1; } /* the TV took it: not written over */
+        else if (!(before && v && b && !strcmp(v, b))) done = 1; /* neither ours nor its own: left as not known */
+        cJSON_Delete(now); } } /* (refused: the next choice) */
+    if (!cJSON_GetObjectItemCaseSensitive(took, x->string)) fprintf(stderr, "[tvtune] %s.%s %s\n", cat, x->string, cJSON_GetObjectItemCaseSensitive(unk, x->string) ? "not known (no reply): kept in the record" : "not taken by this TV");
+  }
+  cJSON_ArrayForEach(x, took) cJSON_DeleteItemFromObjectCaseSensitive(unk, x->string); /* (a confirmed value settles it) */
+  cJSON_Delete(todo);
+  return stop ? -1 : n;
 }
 static cJSON *get_cat(const char *cat, const Job *j, const char *extra) {
   char pl[1000]; int n = snprintf(pl, sizeof pl, "{\"category\":\"%s\",\"keys\":[", cat); int k = 0;
   for (int i = 0; j && i < j->n && n < (int)sizeof pl - 60; i++) if (!strcmp(j->w[i].cat, cat)) n += snprintf(pl + n, sizeof pl - n, "%s\"%s\"", k++ ? "," : "", j->w[i].k);
   if (extra && n < (int)sizeof pl - 60) n += snprintf(pl + n, sizeof pl - n, "%s\"%s\"", k++ ? "," : "", extra);
-  snprintf(pl + n, sizeof pl - n, "]}"); return call(GET, pl);
+  snprintf(pl + n, sizeof pl - n, "]}"); int s; return call(GET, pl, &s);
 }
 
 /* where the sound goes: read once per title, it decides the sound settings and the DTS converter's channels */
@@ -133,24 +197,47 @@ static int read_sound_out(void) {
 }
 
 /* ---- the record of values before (opMu) ---- */
+/* the folder holding the record synced, so its rename survives a power cut. EINVAL: the file system has no folder
+   sync and keeps renames in order itself; any other failure is a failure */
+static int dir_sync(const char *file) {
+  if (FAULT(2)) { errno = EACCES; return 0; }
+  if (FAULT(3)) { errno = EIO; return 0; }
+#ifndef _WIN32
+  char d[1200]; snprintf(d, sizeof d, "%s", file); char *sl = strrchr(d, '/');
+  if (!sl) snprintf(d, sizeof d, "."); else if (sl == d) d[1] = 0; else *sl = 0;
+  int fd = open(d, O_RDONLY); if (fd < 0) return 0;
+  int r = fsync(fd), e = errno; close(fd);
+  if (r && e == EINVAL) return 1;
+  errno = e; return r == 0;
+#else
+  (void)file; return 1;
+#endif
+}
+/* 1: written and synced. 0: not written (the file holds what it held before). -1: the new file is in place but not
+   known to be durable (its folder could not be synced): what it holds stays in memory too, nothing is changed on it */
 static int record_write(void) {
   if (!jpath[0]) return 0;
-  if (!pending || !cJSON_GetArraySize(pending)) return remove(jpath) == 0 || errno == ENOENT;
+  if (!pending || !cJSON_GetArraySize(pending)) { if (remove(jpath)) return errno == ENOENT ? 1 : 0; return dir_sync(jpath) ? 1 : -1; }
   char *t = cJSON_PrintUnformatted(pending); if (!t) return 0;
   char tmp[1240]; snprintf(tmp, sizeof tmp, "%s.tmp", jpath);
   size_t len = strlen(t); int ok = 0; FILE *f = fopen(tmp, "wb");
-  if (f) { ok = fwrite(t, 1, len, f) == len && fflush(f) == 0 && fsync(fileno(f)) == 0; ok &= fclose(f) == 0; }
+  if (f) { ok = !FAULT(1) && fwrite(t, 1, len, f) == len && fflush(f) == 0 && fsync(fileno(f)) == 0; if (fclose(f)) ok = 0; }
   free(t);
   if (ok) {
 #ifdef _WIN32
     remove(jpath);
 #endif
     ok = rename(tmp, jpath) == 0; }
-#ifndef _WIN32
-  if (ok) { char d[1200]; snprintf(d, sizeof d, "%s", jpath); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; int fd = open(d, O_RDONLY); if (fd >= 0) { fsync(fd); close(fd); } } } /* (the rename itself on disk) */
+  if (!ok) { remove(tmp); fprintf(stderr, "[tvtune] the record of the TV's settings could not be written\n"); return 0; }
+  if (!dir_sync(jpath)) { fprintf(stderr, "[tvtune] the record of the TV's settings is written but its folder could not be synced (%s): not relied on\n", strerror(errno)); return -1; }
+  return 1;
+}
+/* a value before into the record in memory; 0 when it could not be stored (nothing is then changed for it) */
+static int jadd(cJSON *pc, const char *k, const char *v) {
+#ifdef TVTUNE_TEST
+  if (FAULT(4) || (FAULT(5) && ++faultN == 2)) return 0;
 #endif
-  if (!ok) { remove(tmp); fprintf(stderr, "[tvtune] the record of the TV's settings could not be written\n"); }
-  return ok;
+  return cJSON_AddStringToObject(pc, k, v) != NULL;
 }
 static void record_load(void) {
   if (loaded) return; loaded = 1;
@@ -160,43 +247,47 @@ static void record_load(void) {
   cJSON *j = cJSON_Parse(b); cJSON *c;
   cJSON_ArrayForEach(c, j) if (cJSON_IsObject(c) && c->string) { cJSON *x; cJSON_ArrayForEach(x, c) if (cJSON_IsString(x) && x->string && clean(x->valuestring)) {
     cJSON *pc = cJSON_GetObjectItemCaseSensitive(pending, c->string); if (!pc) pc = cJSON_AddObjectToObject(pending, c->string);
-    if (!cJSON_GetObjectItemCaseSensitive(pc, x->string)) cJSON_AddStringToObject(pc, x->string, x->valuestring); } }
+    if (pc && !cJSON_GetObjectItemCaseSensitive(pc, x->string)) cJSON_AddStringToObject(pc, x->string, x->valuestring); } }
   cJSON_Delete(j);
   if (cJSON_GetArraySize(pending)) fprintf(stderr, "[tvtune] left tuned when the app last closed: putting it back\n");
 }
 static void record_merge(const cJSON *s) { /* the old store record: kept values before win over nothing, never over the record's own */
   cJSON *c; cJSON_ArrayForEach(c, s) if (cJSON_IsObject(c) && c->string) { cJSON *x; cJSON_ArrayForEach(x, c) if (cJSON_IsString(x) && x->string && clean(x->valuestring)) {
     cJSON *pc = cJSON_GetObjectItemCaseSensitive(pending, c->string); if (!pc) pc = cJSON_AddObjectToObject(pending, c->string);
-    if (!cJSON_GetObjectItemCaseSensitive(pc, x->string)) cJSON_AddStringToObject(pc, x->string, x->valuestring); } }
+    if (pc && !cJSON_GetObjectItemCaseSensitive(pc, x->string)) cJSON_AddStringToObject(pc, x->string, x->valuestring); } }
 }
 static void drop_empty(void) { cJSON *c = pending ? pending->child : NULL; while (c) { cJSON *nx = c->next; if (!cJSON_GetArraySize(c)) cJSON_DeleteItemFromObjectCaseSensitive(pending, c->string); c = nx; } }
 
-/* every value in the record back on the TV: what the TV took leaves the record, the rest stays for the next try */
+/* every value in the record back on the TV: a key leaves the record only once the TV confirmed it (a reply, or a read
+   after a lost reply); the rest stays for the next try */
 static int put_back(void) {
   if (!pending || !cJSON_GetArraySize(pending)) return 1;
-  int left = 0; cJSON *c;
+  int left = 0, unknown = 0; cJSON *c;
   cJSON_ArrayForEach(c, pending) {
-    cJSON *took = cJSON_CreateObject(); set_keys(c->string, c, took);
+    cJSON *took = cJSON_CreateObject(), *unk = cJSON_CreateObject();
+    if (took && unk) set_keys(c->string, c, NULL, took, unk);
     cJSON *x; cJSON_ArrayForEach(x, took) cJSON_DeleteItemFromObjectCaseSensitive(c, x->string);
-    left += cJSON_GetArraySize(c); cJSON_Delete(took); }
-  drop_empty(); record_write(); /* (not written: the file still holds more than is left, and putting those back again is harmless) */
-  fprintf(stderr, left ? "[tvtune] picture and sound: %d setting(s) not put back yet (tried again later)\n" : "[tvtune] picture and sound put back\n", left);
+    unknown += cJSON_GetArraySize(unk); left += cJSON_GetArraySize(c); cJSON_Delete(took); cJSON_Delete(unk); }
+  drop_empty(); record_write(); /* (not written: the file holds more than is left; putting those back again is harmless) */
+  if (left) fprintf(stderr, "[tvtune] picture and sound: %d setting(s) not confirmed put back (%d without reply): kept, tried again later\n", left, unknown);
+  else fprintf(stderr, "[tvtune] picture and sound put back\n");
   return !left;
 }
 
 static int still(unsigned g) { pthread_mutex_lock(&mu); int s = !quitting && wantGen == g && want; pthread_mutex_unlock(&mu); return s; }
 static void wish_sound(Job *j, int out);
-/* a title's settings: each value before into the record on disk, then the change; nothing changes when the record
-   can't be written. Stops between categories and keys once something else is wanted */
+/* a title's settings: each value before into the record on disk, then the change; nothing changes for a key whose value
+   before is not durably in the record. Stops between categories and keys once something else is wanted, and for the
+   pass once the service stops answering */
 static void apply(Job *j, unsigned g) {
   static const char *const CATS[2] = { "picture", "sound" };
   if (j->sAuto || j->even) wish_sound(j, j->sAuto ? read_sound_out() : 0);
-  int reached = 0, upOk = 0, changed = 0;
-  for (int c = 0; c < 2 && still(g); c++) { int need = 0; for (int i = 0; i < j->n; i++) need |= !strcmp(j->w[i].cat, CATS[c]); if (!need) continue;
+  int reached = 0, upOk = 0, changed = 0, halt = 0;
+  for (int c = 0; c < 2 && !halt && still(g); c++) { int need = 0; for (int i = 0; i < j->n; i++) need |= !strcmp(j->w[i].cat, CATS[c]); if (!need) continue;
     cJSON *o = get_cat(CATS[c], j, NULL), *have = o ? cJSON_GetObjectItemCaseSensitive(o, "settings") : NULL; if (cJSON_IsObject(have)) reached = 1;
-    cJSON *nw = cJSON_CreateObject(), *added = cJSON_CreateObject();
+    cJSON *nw = cJSON_CreateObject(), *added = cJSON_CreateObject(), *x;
     cJSON *pc = cJSON_GetObjectItemCaseSensitive(pending, CATS[c]);
-    for (int i = 0; i < j->n && cJSON_IsObject(have); i++) { const Want *w = &j->w[i]; if (strcmp(w->cat, CATS[c])) continue;
+    for (int i = 0; nw && added && i < j->n && cJSON_IsObject(have); i++) { const Want *w = &j->w[i]; if (strcmp(w->cat, CATS[c])) continue;
       const cJSON *v = cJSON_GetObjectItemCaseSensitive(have, w->k); if (!cJSON_IsString(v) || !clean(v->valuestring) || cJSON_GetObjectItemCaseSensitive(nw, w->k)) continue;
       char val[160];
       if (w->rel) { char *e; long cur = strtol(v->valuestring, &e, 10); if (e == v->valuestring || *e) continue; long t = cur + atoi(w->v); if (t < w->lo) t = w->lo; if (t > w->hi) t = w->hi; if (t == cur) continue; snprintf(val, sizeof val, "%ld", t); }
@@ -204,27 +295,41 @@ static void apply(Job *j, unsigned g) {
       { char first[48]; snprintf(first, sizeof first, "%.*s", (int)strcspn(val, "|"), val); if (!strcmp(v->valuestring, first)) { if (!strcmp(w->k, "superResolution")) upOk = 1; continue; } } /* already so */
       cJSON_AddStringToObject(nw, w->k, val);
       if (!pc || !cJSON_GetObjectItemCaseSensitive(pc, w->k)) cJSON_AddStringToObject(added, w->k, v->valuestring); } /* (a key still in the record keeps its first value before) */
-    if (cJSON_GetArraySize(nw)) {
-      if (cJSON_GetArraySize(added)) { if (!pc) pc = cJSON_AddObjectToObject(pending, CATS[c]); cJSON *x; cJSON_ArrayForEach(x, added) cJSON_AddStringToObject(pc, x->string, x->valuestring); }
-      if (!record_write()) { cJSON *x; cJSON_ArrayForEach(x, added) cJSON_DeleteItemFromObjectCaseSensitive(pc, x->string); drop_empty(); /* not on disk: not changed */ }
+    if (nw && added && cJSON_GetArraySize(nw)) {
+      int built = 1, wr = 0;
+      if (cJSON_GetArraySize(added)) {
+        if (!pc) pc = cJSON_AddObjectToObject(pending, CATS[c]);
+        if (!pc) built = 0;
+        cJSON_ArrayForEach(x, added) if (built && !jadd(pc, x->string, x->valuestring)) built = 0; }
+      if (built) wr = record_write();
+      if (!built || wr == 0) { /* the record never held them: out of memory too, nothing changed */
+        if (pc) { cJSON_ArrayForEach(x, added) cJSON_DeleteItemFromObjectCaseSensitive(pc, x->string); drop_empty(); }
+        fprintf(stderr, "[tvtune] %s: the record could not be %s: nothing changed\n", CATS[c], built ? "written" : "made"); }
+      else if (wr < 0) fprintf(stderr, "[tvtune] %s: the record is not known to be on disk: nothing changed\n", CATS[c]); /* (it stays in memory as the file may hold it: put back, to the TV's own values, at the stop) */
       else if (still(g)) {
-        cJSON *took = cJSON_CreateObject(); changed += set_keys(CATS[c], nw, took);
-        if (cJSON_GetObjectItemCaseSensitive(took, "superResolution")) upOk = 1;
-        int drop = 0; cJSON *x; cJSON_ArrayForEach(x, added) if (!cJSON_GetObjectItemCaseSensitive(took, x->string)) { cJSON_DeleteItemFromObjectCaseSensitive(pc, x->string); drop = 1; } /* refused: the TV kept its own */
+        pc = cJSON_GetObjectItemCaseSensitive(pending, CATS[c]);
+        cJSON *go = cJSON_CreateObject(), *took = cJSON_CreateObject(), *unk = cJSON_CreateObject();
+        if (go) cJSON_ArrayForEach(x, nw) if (pc && cJSON_GetObjectItemCaseSensitive(pc, x->string)) cJSON_AddStringToObject(go, x->string, x->valuestring); /* only what the record holds */
+        int r = go && took && unk ? set_keys(CATS[c], go, have, took, unk) : -1;
+        if (r > 0) changed += r;
+        if (r < 0) halt = 1;
+        if (took && cJSON_GetObjectItemCaseSensitive(took, "superResolution")) upOk = 1;
+        int drop = 0; if (took && unk) cJSON_ArrayForEach(x, added) if (!cJSON_GetObjectItemCaseSensitive(took, x->string) && !cJSON_GetObjectItemCaseSensitive(unk, x->string)) { cJSON_DeleteItemFromObjectCaseSensitive(pc, x->string); drop = 1; } /* refused or never sent, every reply in: the TV kept its own */
         if (drop) { drop_empty(); record_write(); }
-        cJSON_Delete(took); } }
+        cJSON_Delete(go); cJSON_Delete(took); cJSON_Delete(unk); } }
     cJSON_Delete(added); cJSON_Delete(nw); cJSON_Delete(o); }
-  fprintf(stderr, "[tvtune] %s: %d setting(s) changed\n", reached ? "tuned" : "the TV's settings are not open to the app: it stays as it is", changed);
+  fprintf(stderr, "[tvtune] %s: %d setting(s) changed\n", reached ? "tuned" : route == 2 ? "the TV's settings are not open to the app: it stays as it is" : "the TV's settings did not answer: tried again with the next title", changed);
   pthread_mutex_lock(&mu);
-  if (reached) avail = 1; else if (avail < 0) avail = 0;
+  if (reached) avail = 1; else if (route == 2) avail = 0; /* (only a refusal turns it off; no reply, a stopped title or nothing to change do not) */
   if (wantGen == g && j->upscale && upOk) { notice = 1; snprintf(noteTxt, sizeof noteTxt, "%s", j->note); }
   pthread_mutex_unlock(&mu);
 }
 
 /* one pass: the TV brought to what is wanted. Holding opMu */
 static void pass(Job *j, unsigned g, cJSON *old, int probe) {
+  routeTried = 0;
   record_load();
-  if (old) { record_merge(old); if (record_write()) { pthread_mutex_lock(&mu); legacyDone = 1; pthread_mutex_unlock(&mu); } }
+  if (old) { record_merge(old); if (record_write() == 1) { pthread_mutex_lock(&mu); legacyDone = 1; pthread_mutex_unlock(&mu); } }
   if (!j || g != appliedGen) { put_back(); appliedGen = 0; }
   if (j && g != appliedGen && still(g)) { apply(j, g); appliedGen = g; }
   if (probe) read_sound_out();
@@ -317,7 +422,7 @@ void tvtune_quit(void) {
   pthread_mutex_lock(&mu); Job *j = want; want = NULL; wantGen++; quitting = 1; pthread_cond_broadcast(&cv);
   if (!jpath[0]) { const char *d = store_data_dir(); if (d && *d) snprintf(jpath, sizeof jpath, "%s/%s", d, JOURNAL); }
   pthread_mutex_unlock(&mu); free(j);
-  pthread_mutex_lock(&opMu); record_load(); put_back(); appliedGen = 0; pthread_mutex_unlock(&opMu);
+  pthread_mutex_lock(&opMu); routeTried = 0; record_load(); put_back(); appliedGen = 0; pthread_mutex_unlock(&opMu);
 }
 
 #ifdef TVTUNE_TEST
@@ -328,6 +433,6 @@ void tvtune_test_die(void) {
   pthread_mutex_lock(&mu); quitting = 1; pthread_cond_broadcast(&cv); int w = worker; pthread_mutex_unlock(&mu);
   if (w) pthread_join(workerT, NULL);
   pthread_mutex_lock(&mu); free(want); want = NULL; wantGen = 0; work = busy = quitting = probeReq = notice = legacyDone = worker = 0; avail = -1; soundOut = 0; cJSON_Delete(legacy); legacy = NULL; jpath[0] = 0; pthread_mutex_unlock(&mu);
-  cJSON_Delete(pending); pending = NULL; loaded = 0; appliedGen = 0; route = -1; tickFirst = 1;
+  cJSON_Delete(pending); pending = NULL; loaded = 0; appliedGen = 0; route = -1; routeTried = 0; faultN = 0; tickFirst = 1;
 }
 #endif

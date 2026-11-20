@@ -10,19 +10,76 @@
 #   <id>_<version>_arm.ipk, icon.png, api/apps/<id>/manifest.json (+ releases/latest.json,
 #   full_description.html) and the repository list (apps.json + api/apps.json).
 # The app's own update check reads the same manifest (src/core/update.c). No git, no push: review the
-# site folder, then commit and push it yourself. The version must go up every time.
+# site folder, then commit and push it yourself.
+#
+# Versions (checked before anything is changed: no folder made, no pkg/appinfo.json edit, no build, no site file):
+#   x.y.z, each part 0 or 1-99999 without a leading zero (what the app's update check reads, src/core/updpick.c).
+#   Stable: above the current stable release. Beta: above the current stable and the current beta.
+#   The same version again: nothing to do when it is the very same package (RELEASE_IPK with the same SHA-256);
+#   refused otherwise (the app compares versions by number: a new package under an old number never reaches anyone).
+#   A stable release at or above the beta's version replaces it: the beta manifest is removed (promoted).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BETA=0; ARGS=(); for a in "$@"; do if [ "$a" = --beta ]; then BETA=1; else ARGS+=("$a"); fi; done
-VER="${ARGS[0]:?usage: tools/release.sh VERSION [site-dir] [--beta]}"
+USAGE="usage: tools/release.sh VERSION [site-dir] [--beta]"
+BETA=0; ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --beta) BETA=1 ;;
+    -*) echo "unknown option: $a"; echo "$USAGE"; exit 2 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+[ "${#ARGS[@]}" -ge 1 ] && [ "${#ARGS[@]}" -le 2 ] || { echo "$USAGE"; exit 2; }
+VER="${ARGS[0]}"
 SITE="${ARGS[1]:-$ROOT/site}"
 ID=tv.stremioorigin.app
 BASE="https://origin-webos.vercel.app"
 SRC="https://github.com/slvjtr1/webos"
-[[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.0.1"; exit 1; }
+P='(0|[1-9][0-9]{0,4})'
+[[ "$VER" =~ ^$P\.$P\.$P$ ]] || { echo "version must look like 1.0.1 (numbers without leading zeros, at most 5 digits each)"; exit 2; }
+sha_of() { (command -v sha256sum >/dev/null && sha256sum "$1" || shasum -a 256 "$1") | cut -d' ' -f1; }
+PRESHA=""
+if [ -n "${RELEASE_IPK:-}" ]; then
+  [ "$(basename "$RELEASE_IPK")" = "${ID}_${VER}_arm.ipk" ] || { echo "RELEASE_IPK must be named ${ID}_${VER}_arm.ipk"; exit 2; }
+  [ -f "$RELEASE_IPK" ] || { echo "no $RELEASE_IPK"; exit 2; }
+  PRESHA=$(sha_of "$RELEASE_IPK")
+fi
+
+# the channel's versions, before anything changes (exit 3: the same package is already released there)
+set +e
+python3 - "$SITE" "$ID" "$VER" "$BETA" "$PRESHA" <<'EOF'
+import json, os, sys
+site, pid, ver, beta, sha = sys.argv[1:]
+d = os.path.join(site, 'api', 'apps', pid)
+def read(p):
+    if not os.path.exists(p): return None, None
+    try:
+        m = json.load(open(p, encoding='utf-8'))
+        return tuple(int(x) for x in m['version'].split('.')), m.get('ipkHash', {}).get('sha256')
+    except Exception as e:
+        sys.exit('cannot read %s (%s): fix it before releasing' % (p, e))
+sv, ssha = read(os.path.join(d, 'manifest.json'))
+bv, bsha = read(os.path.join(d, 'beta', 'manifest.json'))
+v = tuple(int(x) for x in ver.split('.'))
+show = lambda t: '.'.join(map(str, t))
+def same(cur, cursha, chan):
+    if sha and cursha == sha: print('%s %s is already released with this very package: nothing to do' % (chan, ver)); sys.exit(3)
+    sys.exit('%s %s is already released%s: the version must go up' % (chan, ver, '' if sha else ' (to repeat it, pass the same package as RELEASE_IPK)'))
+if beta == '1':
+    if sv and v <= sv: sys.exit('beta %s is not newer than the stable %s' % (ver, show(sv)))
+    if bv and v < bv: sys.exit('beta %s is older than the current beta %s' % (ver, show(bv)))
+    if bv and v == bv: same(bv, bsha, 'beta')
+else:
+    if sv and v < sv: sys.exit('stable %s is older than the current stable %s' % (ver, show(sv)))
+    if sv and v == sv: same(sv, ssha, 'stable')
+EOF
+rc=$?
+set -e
+[ $rc = 3 ] && exit 0
+[ $rc = 0 ] || exit 2
 mkdir -p "$SITE"
 
-if [ -n "${RELEASE_IPK:-}" ]; then IPK="$RELEASE_IPK"; [ "$(basename "$IPK")" = "${ID}_${VER}_arm.ipk" ] || { echo "RELEASE_IPK must be named ${ID}_${VER}_arm.ipk"; exit 1; }
+if [ -n "${RELEASE_IPK:-}" ]; then IPK="$RELEASE_IPK"
 else
 python3 - "$ROOT" "$VER" <<'EOF'
 import re, sys
@@ -40,7 +97,7 @@ IPK="$ROOT/dist/${ID}_${VER}_arm.ipk"
 mkdir -p "$ROOT/dist/dbg/$VER" && cp "$ROOT/build/webos/stremioorigin.dbg" "$ROOT/dist/dbg/$VER/" # kept per version: a shared crash report names its code from it (getlogs)
 fi
 [ -f "$IPK" ] || { echo "no $IPK"; exit 1; }
-SHA=$( (command -v sha256sum >/dev/null && sha256sum "$IPK" || shasum -a 256 "$IPK") | cut -d' ' -f1)
+SHA=$(sha_of "$IPK")
 
 [ "$BETA" = 1 ] || cp "$ROOT/pkg/largeIcon.png" "$SITE/icon.png"
 python3 - "$SITE" "$ID" "$VER" "$SHA" "$BASE" "$SRC" "$ROOT/tools/homebrew" "$BETA" <<'EOF'
@@ -57,10 +114,6 @@ manifest = {
 d = os.path.join(site, 'api', 'apps', pid)
 if beta == '1':
     # the beta's own file, nothing else: the stable channel stays as the last stable release left it
-    stable = os.path.join(d, 'manifest.json')
-    if os.path.exists(stable):
-        sv = json.load(open(stable, encoding='utf-8')).get('version', '0.0.0')
-        if tuple(map(int, sv.split('.'))) >= tuple(map(int, ver.split('.'))): sys.exit('beta %s is not newer than the stable %s' % (ver, sv))
     manifest['channel'] = 'beta'
     os.makedirs(os.path.join(d, 'beta'), exist_ok=True)
     open(os.path.join(d, 'beta', 'manifest.json'), 'w').write(json.dumps(manifest, indent=2) + '\n')
@@ -77,6 +130,11 @@ open(os.path.join(site, 'api', 'apps.json'), 'w').write(json.dumps(listing, inde
 listing['packages'][0]['fullDescriptionUrl'] = 'api/' + listing['packages'][0]['fullDescriptionUrl'] # the same list at the root: paths from there
 open(os.path.join(site, 'apps.json'), 'w').write(json.dumps(listing, indent=2) + '\n')
 open(os.path.join(d, 'full_description.html'), 'w', encoding='utf-8').write(full)
+# promoted: a beta at or below this stable release is replaced by it
+bp = os.path.join(d, 'beta', 'manifest.json')
+if os.path.exists(bp):
+    bv = tuple(int(x) for x in json.load(open(bp, encoding='utf-8'))['version'].split('.'))
+    if bv <= tuple(int(x) for x in ver.split('.')): os.remove(bp); print('beta', '.'.join(map(str, bv)), 'replaced by this stable release: beta manifest removed')
 print('site updated:', pid, ver, sha)
 EOF
 if [ "$BETA" = 1 ]; then echo "upload $IPK to the GitHub PRE-release v$VER (gh release create v$VER --prerelease), then commit site/ and push"
