@@ -680,11 +680,17 @@ static void preview_subs(float x, float y, float w, float h) {
   int sz = atoi(store_get("subtitleSize", "2")); static const int SZ[] = { 72, 80, 100, 120, 140, 160, 180 }; if (sz < 0 || sz > 6) sz = 2; int px = (int)(34 * SZ[sz] / 100.0f + 0.5f);
   uint32_t col = hexcol(store_get("subsColor", "#ffffff")), ol = hexcol(store_get("subsOutlineColor", "#000000")); float bo = (float)atof(store_get("subsBgStyle", "0"));
   { float k = atoi(store_get("subsBright", "100")) / 100.0f; if (k > 0 && k < 1) { col = (col & 0xff000000u) | ((uint32_t)(((col >> 16) & 255) * k) << 16) | ((uint32_t)(((col >> 8) & 255) * k) << 8) | (uint32_t)((col & 255) * k); ol = (ol & 0xff000000u) | ((uint32_t)(((ol >> 16) & 255) * k) << 16) | ((uint32_t)(((ol >> 8) & 255) * k) << 8) | (uint32_t)((ol & 255) * k); } } /* (the brightness, as the player draws it) */
-  unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000) ^ (!strcmp(store_get("subsOutlineColor", "#000000"), "none") ? 0x5bd1e995u : 0) ^ ((unsigned)store_get("subsShadow", "medium")[0] << 20); if (sig != subSig) { if (subSig) { subAt = app_now(); orbs_push(&subOrbs, ORB_DONE, 0.5f); } subSig = sig; }
+  const char *key = S.cat == S.shown && S.zone >= 1 && S.idx < cats[S.cat].n ? cats[S.cat].opts[S.idx].k : "";
+  int arabic = !strcmp(key, "subsFontAr") || !strcmp(key, "subsCleanTashkeel");
+  int clean = strcmp(store_get("subsCleanMarks", "true"), "false") && !strcmp(store_get("subsCleanTashkeel", "false"), "true");
+  unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000) ^ (!strcmp(store_get("subsOutlineColor", "#000000"), "none") ? 0x5bd1e995u : 0) ^ ((unsigned)store_get("subsShadow", "medium")[0] << 20);
+  if (arabic) sig ^= clean ? 0x859cd82du : 0x749bb17au;
+  if (sig != subSig) { if (subSig) { subAt = app_now(); orbs_push(&subOrbs, ORB_DONE, 0.5f); } subSig = sig; }
   orbs_step(&subOrbs, app_dt(), 1, 1, 2.6f); orbs_draw_in(&subOrbs, 0.5f, x, y, w, h, 18); /* the app's glows, over the picture, inside its corners */
   gfx_rrect_v(x, y, w, h, 18, BLACK_A(0), BLACK_A(170)); /* the player's shade at the foot */
-  int arF = S.cat == S.shown && S.zone >= 1 && S.idx < cats[S.cat].n && !strcmp(cats[S.cat].opts[S.idx].k, "subsFontAr"); /* (the Arabic font being set: the line in Arabic) */
-  const char *line = arF ? "\xd8\xb9\xd8\xaf\xd8\xaa\xd9\x8f\x20\xd9\x84\xd8\xa3\xd8\xae\xd8\xa8\xd8\xb1\xd9\x83\x20\xd8\xa8\xd8\xb4\xd9\x8a\xd8\xa1\x2e" : T("I came back to tell you something."); float maxW = w - 80, lh = text_line_height(px) * 1.1f;
+  const char *line = T("I came back to tell you something.");
+  if (arabic) line = clean ? "عدت لأخبرك بشيء." : "عُدْتُ لِأُخْبِرَكَ بِشَيْءٍ.";
+  float maxW = w - 80, lh = text_line_height(px) * 1.1f;
   int sfw = subfont_w(600); static int cPx, cN, cFw; static float cW, cMax; static unsigned cLg; static const char *cLine; /* measured once per size, font, line and language */
   if (cPx != px || cFw != sfw || cLine != line || cLg != i18n_gen() || cMax != maxW) { cPx = px; cFw = sfw; cLine = line; cLg = i18n_gen(); cMax = maxW; cN = text_wrap_count(line, maxW, 2, px, sfw, 0); cW = text_width(line, px, sfw, 0); }
   int n = cN; float ty; { int pp = atoi(store_get("subsPosPct", "8")); if (pp < 2 || pp > 30) pp = 8; static Tween pg; static int pgSet; float want = h * pp / 100.0f + 8; /* the Position: the same share of the picture's height as in the player, gliding there */

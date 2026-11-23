@@ -16,20 +16,28 @@ static int dirty; static Uint32 dirtyAt;
 
 static char *read_all(const char *p, size_t *len) {
   FILE *f = fopen(p, "rb"); if (!f) return NULL;
-  fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-  char *b = malloc(n + 1); size_t got = fread(b, 1, n, f); fclose(f); b[got] = 0; if (len) *len = got; return b;
+  if (fseek(f, 0, SEEK_END)) { fclose(f); return NULL; }
+  long n = ftell(f);
+  if (n < 0 || fseek(f, 0, SEEK_SET)) { fclose(f); return NULL; }
+  char *b = malloc((size_t)n + 1);
+  if (!b) { fclose(f); return NULL; }
+  size_t got = fread(b, 1, (size_t)n, f); fclose(f);
+  if (got != (size_t)n) { free(b); return NULL; }
+  b[got] = 0; if (len) *len = got; return b;
 }
 static int write_all(const char *p, const void *data, size_t len) {
   static unsigned seq; char tmp[1240]; snprintf(tmp, sizeof tmp, "%s.%u.tmp", p, __sync_add_and_fetch(&seq, 1)); /* the writer thread and the exit flush never share one */
   FILE *f = fopen(tmp, "wb"); if (!f) return 0;
-  size_t w = fwrite(data, 1, len, f); fclose(f);
-  if (w != len) { remove(tmp); return 0; }
-  return rename(tmp, p) == 0;
+  size_t w = fwrite(data, 1, len, f);
+  int closed = fclose(f);
+  if (w == len && !closed && !rename(tmp, p)) return 1;
+  remove(tmp);
+  return 0;
 }
 void store_init(const char *dataDir) {
   snprintf(dir, sizeof dir, "%s", dataDir); snprintf(path, sizeof path, "%s/state.json", dir);
   char *t = read_all(path, NULL); root = t ? cJSON_Parse(t) : NULL; free(t);
-  if (!root) root = cJSON_CreateObject();
+  if (!cJSON_IsObject(root)) { cJSON_Delete(root); root = cJSON_CreateObject(); }
   char c[1100]; snprintf(c, sizeof c, "%s/cache", dir); mkdir(c, 0755);
 }
 const char *store_data_dir(void) { return dir; }
@@ -59,35 +67,56 @@ void store_remove(const char *k) { if (find(k)) { cJSON_DeleteItemFromObjectCase
 /* cache files are written on a thread of their own: a disk write in the middle of a frame was a long frame on the TV
    (its flash can take tens of ms) */
 #include <pthread.h>
-typedef struct CW { char path[1200]; unsigned char *data; size_t len; struct CW *next; } CW;
+#include <stdint.h>
+typedef struct CW { char path[1200]; unsigned char *data; size_t len; uint64_t stateVersion; struct CW *next; } CW;
 static CW *cwHead, *cwTail; static pthread_mutex_t cwMu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t cwCv = PTHREAD_COND_INITIALIZER; static int cwThread;
+static pthread_mutex_t stateMu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t stateVersion, savedVersion;
+/* The exit flush may reach disk before an older snapshot in the writer queue. */
+static int write_snapshot(const char *p, const void *data, size_t len, uint64_t version) {
+  if (!version) return write_all(p, data, len);
+  pthread_mutex_lock(&stateMu);
+  int ok = version <= savedVersion || write_all(p, data, len);
+  if (ok && version > savedVersion) savedVersion = version;
+  pthread_mutex_unlock(&stateMu);
+  return ok;
+}
 static void cache_prune_soon(int failed);
 static int is_cache_path(const char *p);
 static void *cw_run(void *a) { plat_thread_background(15); (void)a;
   for (;;) { pthread_mutex_lock(&cwMu); while (!cwHead) pthread_cond_wait(&cwCv, &cwMu); CW *w = cwHead; cwHead = w->next; if (!cwHead) cwTail = NULL; pthread_mutex_unlock(&cwMu);
-    int ok = write_all(w->path, w->data, w->len), cache = is_cache_path(w->path); size_t n = w->len; free(w->data); free(w);
+    int ok = write_snapshot(w->path, w->data, w->len, w->stateVersion), cache = is_cache_path(w->path); size_t n = w->len; free(w->data); free(w);
+    if (!cache && !ok) fprintf(stderr, "[store] could not write state\n");
     if (cache) { static long written; written += (long)n; if (!ok) { fprintf(stderr, "[cache] a write failed (the disk full?): pruning now\n"); cache_prune_soon(1); written = 0; } else if (written > cache_cap_bytes() / 8 && cache_cap_bytes() > 0) { cache_prune_soon(0); written = 0; } } } /* (kept under its cap while running, not only at start) */
   return NULL; }
-static void write_later(const char *path, unsigned char *own, size_t len) { /* own: malloc'd, taken */
-  CW *w = malloc(sizeof *w); snprintf(w->path, sizeof w->path, "%s", path); w->data = own; w->len = len; w->next = NULL;
+static void write_later(const char *path, unsigned char *own, size_t len, uint64_t version) { /* own: malloc'd, taken */
+  CW *w = malloc(sizeof *w);
+  if (!w) { write_snapshot(path, own, len, version); free(own); return; }
+  snprintf(w->path, sizeof w->path, "%s", path); w->data = own; w->len = len; w->stateVersion = version; w->next = NULL;
   pthread_mutex_lock(&cwMu);
   if (!cwThread) { pthread_t t; if (pthread_create(&t, NULL, cw_run, NULL) == 0) { pthread_detach(t); cwThread = 1; } }
-  if (!cwThread) { pthread_mutex_unlock(&cwMu); write_all(w->path, w->data, w->len); free(w->data); free(w); return; }
+  if (!cwThread) { pthread_mutex_unlock(&cwMu); write_snapshot(w->path, w->data, w->len, w->stateVersion); free(w->data); free(w); return; }
   if (cwTail) cwTail->next = w; else cwHead = w; cwTail = w; pthread_cond_signal(&cwCv); pthread_mutex_unlock(&cwMu);
 }
 static void cache_path(const char *key, char *out, size_t cap);
-void cache_write(const char *key, const unsigned char *data, size_t len) { char p[1200]; cache_path(key, p, sizeof p); unsigned char *c = malloc(len ? len : 1); memcpy(c, data, len); write_later(p, c, len); }
+void cache_write(const char *key, const unsigned char *data, size_t len) { char p[1200]; cache_path(key, p, sizeof p); unsigned char *c = malloc(len ? len : 1); if (!c) return; memcpy(c, data, len); write_later(p, c, len, 0); }
 void store_flush(void) {
-  if (!dirty) return; dirty = 0;
+  pthread_mutex_lock(&stateMu);
+  int pending = stateVersion > savedVersion;
+  pthread_mutex_unlock(&stateMu);
+  if (!dirty && !pending) return;
   char *t = cJSON_PrintUnformatted(root); if (!t) return;
-  if (!write_all(path, t, strlen(t))) fprintf(stderr, "[store] could not write %s\n", path);
+  if (write_snapshot(path, t, strlen(t), ++stateVersion)) dirty = 0;
+  else fprintf(stderr, "[store] could not write %s\n", path);
   free(t);
 }
 /* while running, the state is printed here and written by the writer thread (the file is a few hundred KB with a
    library); store_flush() at exit writes it at once */
 void store_pump(void) {
-  if (!dirty || SDL_GetTicks() - dirtyAt <= 1500) return; dirty = 0;
-  char *t = cJSON_PrintUnformatted(root); if (t) write_later(path, (unsigned char *)t, strlen(t));
+  if (!dirty || SDL_GetTicks() - dirtyAt <= 1500) return;
+  char *t = cJSON_PrintUnformatted(root); if (!t) return;
+  dirty = 0;
+  write_later(path, (unsigned char *)t, strlen(t), ++stateVersion);
 }
 
 /* ---- file cache ---------------------------------------------------------------------------- */
