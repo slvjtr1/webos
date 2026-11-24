@@ -11,7 +11,7 @@ cc -std=c11 -D_GNU_SOURCE -Wall -Wextra -O1 -g ${SB_ASAN:+-fsanitize=address,und
 
 # the update callbacks (src/core/update.c needs the SDL/GLES headers: the system's, or HOSTINC=<dir with SDL2/ GLES2/ KHR/>)
 cc -std=c11 -D_GNU_SOURCE -Wall -Wextra -O1 -g ${SB_ASAN:+-fsanitize=address,undefined} -Isrc -Ithird_party/cjson \
-  ${HOSTINC:+-isystem "$HOSTINC"} tests/update/flow.c src/core/update.c src/core/updpick.c third_party/cjson/cJSON.c -o build/update_flow
+  ${HOSTINC:+-isystem "$HOSTINC"} tests/update/flow.c src/core/update.c src/core/updpick.c third_party/cjson/cJSON.c -lm -o build/update_flow
 ./build/update_flow 2>/dev/null
 
 T="$ROOT/build/update_site"; rm -rf "$T"; mkdir -p "$T/site" "$T/ipk"

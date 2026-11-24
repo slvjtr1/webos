@@ -15,6 +15,8 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/submarks/test.c src/core/submarks.c -o /tmp/submarks
           /tmp/submarks
+          cc -std=c11 -D_GNU_SOURCE -ffunction-sections -fdata-sections -Isrc -Ithird_party/cjson tests/submarks/embedded.c src/core/submarks.c -Wl,--gc-sections -lm -lz -o /tmp/embedded
+          /tmp/embedded
       - name: Player and update checks
         run: |
           mkdir -p "$RUNNER_TEMP/compiler"
