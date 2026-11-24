@@ -8,6 +8,21 @@ static void eq(const char *in, const char *want) {
   if (strcmp(b, want)) { printf("FAIL: [%s] -> [%s], want [%s]\n", in, b, want); fails++; }
 }
 int main(void) {
+  const char *cues[][2] = {
+    {"&rlm;Hello &#x61F;", "\xe2\x80\x8fHello \xd8\x9f"},
+    {"&amp;rlm;<font color='red'><i>one</i></font><br/>two", "\xe2\x80\x8fone\ntwo"},
+    {"{\\an8}&#8207;A &amp; B", "\xe2\x80\x8f" "A & B"},
+    {"&lt;b&gt;3 &lt; 4&lt;/b&gt;", "3 < 4"},
+    {"&#x110000; &#0; &unknown; &amp;", "&#x110000; &#0; &unknown; &"},
+    {"&#128522;", "\xf0\x9f\x98\x8a"}
+  };
+  for (size_t i = 0; i < sizeof cues / sizeof *cues; i++) {
+    char buf[256]; snprintf(buf, sizeof buf, "%s", cues[i][0]);
+    sub_arabic_embedded_clean(buf);
+    if (strcmp(buf, cues[i][1])) { puts("embedded Arabic cue mismatch"); fails++; }
+  }
+  if (!sub_lang_arabic("ar-SA") || !sub_lang_arabic("ARA") || sub_lang_arabic("arc") ||
+      sub_lang_arabic("fa") || sub_lang_arabic("en-Arab")) fails++;
   eq("(Laughing) Okay.", "Laughing Okay.");
   eq("\"Hello there!\"", "Hello there!");
   eq("He said \"run\" - now!", "He said run - now!");

@@ -1,0 +1,22 @@
+name: Native player checks
+on:
+  workflow_dispatch:
+  push:
+    paths: ['src/**', 'tests/**', '.github/workflows/native-checks.yml']
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y libsdl2-dev libgles2-mesa-dev
+      - name: Arabic subtitle cues
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/submarks/test.c src/core/submarks.c -o /tmp/submarks
+          /tmp/submarks
+      - name: Player and update checks
+        run: |
+          for suite in audorig best forced resample scrobble ssreq supcard traktrows traktwatch tvtune update waitlines; do
+            bash "tests/$suite/run.sh" || exit 1
+          done

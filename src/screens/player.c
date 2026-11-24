@@ -546,7 +546,7 @@ static void ass_sync(void) {
   int n = -1, k = -1, styled = !P.assPlain && strcmp(store_get("subsAssStyle", "styled"), "plain");
   if (!strncmp(P.curSub, "emb:", 4) && SL.mkv && !SL.tv && mkv && styled) { n = atoi(P.curSub + 4); for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == n) k = i; }
   int ext = styled && !strncmp(P.curSub, "ext:", 4) && extAss && extAssTok == SL.tok && P.ncues;
-  int want = ext || (k >= 0 && embKind[k] == 2);
+  int want = ext || (k >= 0 && embKind[k] == 2 && !sub_lang_arabic(P.emb[k].lang));
   static int openN = -1; static const void *openMkv; static unsigned openTok;
   if (!want) { if (asssubs_on()) { asssubs_close(); openN = -1; } return; }
   if (ext) { if (!asssubs_on() || openN != -2 || openTok != SL.tok) { asssubs_open_script(extAss, P.pick.lang); openN = -2; openTok = SL.tok; } }

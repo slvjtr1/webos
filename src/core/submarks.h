@@ -7,4 +7,6 @@ extern volatile int sub_marks_on;     /* the setting, read on any thread (set fr
 extern volatile int sub_tashkeel_on;  /* Remove Arabic diacritics, under it: the vowel marks go too (only while sub_marks_on) */
 void sub_marks_clean(char *s);        /* in place; a line left with nothing but spaces becomes empty */
 void sub_tashkeel_clean(char *s);     /* in place: the Arabic vowel marks (tashkeel) taken out, the letters stay */
+int sub_lang_arabic(const char *lang);
+void sub_arabic_embedded_clean(char *text); /* writable UTF-8, never expands */
 #endif

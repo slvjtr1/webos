@@ -1,5 +1,6 @@
 #include "platform/plat.h"
 #include "core/mkvsubs.h"
+#include "core/submarks.h"
 volatile int mkvWantCues; /* (set by the player before a film opens: its seek previews want the keyframe index even with no text track) */
 #include "core/net.h"
 #include <pthread.h>
@@ -206,6 +207,8 @@ static int each_tracks(void *c_, unsigned id, long d, long long sz, long at) { C
   if (id != ID_TRACKENTRY || sz < 0 || c->info->ntr >= 64) return 0;
   Track *t = &c->info->tr[c->info->ntr]; memset(t, 0, sizeof *t); strcpy(t->lang, "eng"); t->def = 1;
   Ctx k = *c; k.t = t; each(c->b, c->n, d, d + (long)sz, each_track, &k);
+  if (t->bcp[0] && (sub_lang_arabic(t->bcp) || sub_lang_arabic(t->lang)))
+    snprintf(t->lang, sizeof t->lang, "%.*s", (int)sizeof t->lang - 1, t->bcp);
   if (t->bcp[0] && (!t->lang[0] || !strcmp(t->lang, "und"))) { char *dash = strchr(t->bcp, '-'); if (dash) *dash = 0; snprintf(t->lang, sizeof t->lang, "%s", t->bcp); }
   if (!strcmp(t->lang, "und")) t->lang[0] = 0;
   c->info->ntr++; return 0; }
@@ -497,8 +500,18 @@ static int make_line(MkvSession *s, TState *t, const Block *blk, double st, doub
   if (!data) return 0;
   double dur = blk->dur >= 0 ? blk->dur * scale : (cueDur >= 0 ? cueDur : DEFAULT_DUR_S);
   double e = st + (dur > 0 ? dur : 0.5);
-  int ok = t->tr->kind == 2 ? ass_line((const char *)data, st, e, t->hdr, out) : text_line((const char *)data, st, e, out);
-  if (t->rawOn && t->tr->kind == 2) { /* the styled renderer takes the event as it is, signs without text too */
+  int arabic = sub_lang_arabic(t->tr->lang), ok;
+  if (arabic && t->tr->kind != 2) {
+    memset(out, 0, sizeof *out);
+    out->s = st; out->e = e; out->t = (char *)data; data = NULL;
+    ok = 1;
+  } else ok = t->tr->kind == 2 ? ass_line((const char *)data, st, e, t->hdr, out) : text_line((const char *)data, st, e, out);
+  if (arabic && ok) {
+    sub_arabic_embedded_clean(out->t);
+    out->x = out->y = -1; out->an = out->color = out->bold = out->italic = out->layer = 0;
+    out->hidden = !*out->t;
+  }
+  if (!arabic && t->rawOn && t->tr->kind == 2) { /* the styled renderer takes the event as it is, signs without text too */
     if (!ok) { memset(out, 0, sizeof *out); out->s = st; out->e = e; out->t = strdup(""); out->x = out->y = -1; out->hidden = 1; ok = 1; }
     *raw = (char *)data; data = NULL; }
   free(data);
