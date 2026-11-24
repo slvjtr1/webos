@@ -17,6 +17,12 @@ jobs:
           /tmp/submarks
       - name: Player and update checks
         run: |
-          for suite in audorig best forced resample scrobble ssreq supcard traktrows traktwatch tvtune update waitlines; do
-            bash "tests/$suite/run.sh" || exit 1
+          mkdir -p "$RUNNER_TEMP/compiler"
+          printf '#!/bin/sh\nexec clang -D_GNU_SOURCE "$@"\n' > "$RUNNER_TEMP/compiler/cc"
+          chmod +x "$RUNNER_TEMP/compiler/cc"
+          export PATH="$RUNNER_TEMP/compiler:$PATH"
+          failed=0
+          for suite in audorig forced resample scrobble ssreq supcard traktrows traktwatch tvtune update waitlines; do
+            bash "tests/$suite/run.sh" || { echo "::error::Suite $suite failed"; failed=1; }
           done
+          exit "$failed"
