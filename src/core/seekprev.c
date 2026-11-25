@@ -185,7 +185,7 @@ static int may_fill(Ctx *c, double now) { /* the film first, always: no fill whi
 #else
   if (now < c->fillUntil || now - c->playSince < 2) return 0; /* (a TV: 2 s of play after a seek, then the buffer decides) */
 #endif /* (playing without a stall first: 2 s on a roomy link, 10 s otherwise; after a stall, a while longer) */
-  if (c->ahead < 0) { Ctx *p = c->prep == 1 ? cur : NULL; return !(p && (p->buffering || (p->ahead >= 0 && p->ahead < 18))); } /* (nothing plays it: a download, or the next episode, made only while the one playing has a good buffer) */
+  if (c->ahead < 0) { if (c->prep != 1) return 0; Ctx *p = cur; return p && !p->buffering && p->ahead >= 18; } /* (nothing plays it: a download, or the next episode, made only while the one playing has a good buffer) */
   if (c->ahead < c->prevAhead - 2) { c->steadySince = 0; c->backUntil = now + 10; return 0; } /* (the buffer draining: the readers step back) */
 #ifdef SB_PHONE
   double need = c->tight || c->heavy ? 27 : 18; /* (seconds buffered: the player keeps at most 30) */
@@ -213,7 +213,7 @@ static void *fetch_run(void *arg) { Ctx *c = arg; nice_to(10);
     double now = mono(); int focus = 0, k = room ? pick(c, &focus) : -1; if (room) c->exhausted = k < 0 && c->tier == 0 && !c->partial;
     if (!focus && c->capBytes > 0 && c->bytes >= c->capBytes) { static int said; if (!said) { said = 1; fprintf(stderr, "[seekprev] %ld MB read: no more background fill for this film (the finger still gets its pictures)\n", c->bytes >> 20); } k = -1; }
     int rcap = c->paused ? 4 : c->tor ? 3 : c->roomy ? 3 : 1; /* (playing: few readers beside the film; paused: more) */
-    int ok = k >= 0 && me < c->lanes && me < rcap && now >= c->backUntil && (focus || may_fill(c, now)) && !(c->focusOn && !focus && me > 0) && !(c->got < 48 && (c->buffering || c->paused) && me > 0); /* (the film still loading: one reader only) */ /* (the finger down: only one reader goes on filling) */
+    int ok = k >= 0 && me < c->lanes && me < rcap && now >= c->backUntil && ((focus && (c->paused || !c->buffering)) || (!focus && may_fill(c, now))) && !(c->focusOn && !focus && me > 0) && !(c->got < 48 && (c->buffering || c->paused) && me > 0); /* (the film still loading: one reader only) */ /* (the finger down: only one reader goes on filling) */
     if (!ok) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += 200000000; if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; } pthread_cond_timedwait(&c->cv, &c->mu, &ts); continue; }
     long cap = sp_metered && sp_metered() ? METER_CAP : WIFI_CAP;
     /* a batch: this one and the next ones the plan wants, all in one request, when the server answers that way */
