@@ -34,9 +34,9 @@
 #define HERO_X 48.0f
 #define HERO_Y 100.0f
 #define HERO_W (SB_W * 0.52f)
-/* the boards' cards: fewer, bigger (about five and a half across, one row in full view) */
-#define RC_W 300.0f
-#define RC_H 450.0f
+/* poster cards fit the complete first Home row beneath the hero */
+#define RC_W 232.0f
+#define RC_H 348.0f
 #define RW_W 500.0f
 #define RW_H 281.0f
 #define RGAP 28.0f
@@ -69,8 +69,8 @@ typedef struct {
   Tween spotY, rowsA, spotA, dotsA, dotW[NFEAT]; int heroSpot, dotsWant; double dotsGo; char scoped[SB_ID];
   Tween hostY; Timer1 fade; Nudge nudge; int ptrHold, holdRow; /* the pointer moves the focus: the rows stay where they are (as for holdRow) until a key */
   int heroAction; /* 0: catalog, 1: watch or resume, 2: details */
-  double heroAt, fadeHold; int heroPending, fastBg; /* fadeHold: the fade-in waits (a moment at most) for the whole description */
-  /* the hero, in one path: fade out, gather (details, translation, logo: 0.45 s at most), put in, fade in; anything
+  double heroAt, fadeHold; int heroPending; /* fadeHold: the fade-in waits (a moment at most) for the whole description */
+  /* the hero, in one path: fade out, gather (details, translation, logo: 0.22 s at most), put in, fade in; anything
      better that arrives later comes in with one more fade */
   Item hero; int heroSet, heroShown, heroPhase; Tween heroA; double heroT0, laterAt, putAt; float heroFo; HeroView view; Tween logoIn; TmdbWait hw; int aheadDone;
   /* the view is compared with what it would be now only when something it reads moved: the hero item (heroVer), its
@@ -329,7 +329,7 @@ static void feat_go(Board *b, int step) { int n = b->nfeat; if (!n) return; b->s
 static int first_visible_row(Board *b, int from, int dir) { for (int i = from; i >= 0 && i < b->n; i += dir) if (!b->rows[i].hidden && !b->rows[i].closing) return i; return -1; }
 
 /* ---- the hero ---- */
-static void hero_soon(Board *b, int ms) { b->heroAt = app_now() + ms / 1000.0; b->heroPending = 1;
+static void hero_soon(Board *b, int ms) { b->heroAt = app_now() + (ms > 75 ? 75 : ms) / 1000.0; b->heroPending = 1;
   const Item *it = focused_of(b); if (it) { char pu[512], lu[512]; accent_tint_fetch(it->id, sb_poster_of(it, pu, sizeof pu), sb_logo_of(it, lu, sizeof lu)); } }
 static Item *item_at(Board *b, int row, int col) {
   if (row == FEAT_ROW) return col < b->nfeat ? &b->feat[col] : NULL; /* a spotlight title */
@@ -406,9 +406,9 @@ static void hero_apply(Board *b) {
   if (!it) { tween_to(&b->heroA, 0, 0.12f, EASE_CSS_EASEIN); b->heroSet = 0; return; } /* nothing to show yet: never the previous screen's title */
   int again = b->heroSet && b->heroShown && !strcmp(b->hero.id, it->id) && b->heroPhase == HP_IDLE && b->heroSpot == spotLike(b); /* back from its page: it is already there */
   char bgu[512], pu[512]; sb_bg_mid(it, bgu, sizeof bgu); sb_poster_of(it, pu, sizeof pu);
-  int fast = b->fastBg; b->fastBg = 0; /* entering a board: show its backdrop right away */
-  float idle = app_idle(); int delay = (app_splash_done && !fast) ? (int)((0.4f - idle) * 1000) : 0; if (delay < 0) delay = 0;
-  bg_set(bgu, delay, pu); /* shown ~0.4 s after the last move */
+
+  bg_set(bgu, 0, pu);
+
   if (spotOn(b) && b->nfeat) { char lu[512]; accent_scope(it->id, pu, sb_logo_of(it, lu, sizeof lu)); snprintf(b->scoped, sizeof b->scoped, "%s", it->id); } /* the spotlight wears each title's colours; its dot moves in the same moment */
   { int sp = spotLike(b) && b->nfeat; meta_ask(b, sp ? FEAT_ROW : b->rowIdx, sp ? b->featIdx % b->nfeat : b->rows[b->rowIdx].col); }
   if (again) { b->hero = *it; b->heroVer++; return; }
@@ -438,7 +438,7 @@ static void hero_tick(Board *b, float dt) {
     if (lu[0] && !logo) img_get(lu, 520, 175, NULL);
     if (loc && logo && meta) { const TmdbLoc *L = tmdb_loc(it->type, it->id, 1); meta = desc_ready(b, L && L->overview && L->overview[0] ? L->overview : it->description); } /* its lines rasterised while it is invisible */
     if (hero_live(it)) { if (el >= b->heroFo + 0.01 && (logo || el >= 1.5)) { b->heroPhase = HP_IDLE; hero_put(b); } return; } /* a channel: its logo only */
-    if (el >= b->heroFo + 0.01 && ((loc && logo && meta) || el >= 0.45)) { b->heroPhase = HP_IDLE; hero_put(b); } /* the fade-out is over first */
+    if (el >= b->heroFo + 0.01 && ((loc && logo && meta) || el >= 0.22)) { b->heroPhase = HP_IDLE; hero_put(b); } /* the fade-out is over first */
     return;
   }
   if (b->heroPhase == HP_IDLE && b->heroShown) { hero_ahead(b);
@@ -623,7 +623,9 @@ static void hero_draw(Board *b) {
     if (cb[0]) text_draw(cb, rtl ? cx0 - 22 : cx0 + cw + 22, y + ch / 2 - text_line_height(26) / 2, 26, 500, WHITE_A(175), 0.3f, HERO_W - cw - 22, align);
     gfx_opacity_pop(); gfx_offset_pop(); gfx_opacity_pop(); return; } /* (the box is drawn on its own, above) */
   y += 20; meta_draw_p(&hl->mp, x, y, WHITE_A(255), align); y += text_line_height(META_PX) > 34 ? text_line_height(META_PX) : 34;
-  y += 16; text_draw_wrapped(v->desc, x, y, HERO_W, 3, DESC_PX, 400, WHITE_A(204), 0, align, DESC_LH);
+  y += 16;
+  gfx_clip_push(0, y, SB_W, fmaxf(0, HOME_ROWS_TOP - 100 - y)); text_draw_wrapped(v->desc, x, y, HERO_W, 3, DESC_PX, 400, WHITE_A(204), 0, align, DESC_LH);
+  gfx_clip_pop();
   if (hero_actions_available(&b->hero) && !strcmp(b->hero.id, v->id)) {
     float edge = x, by = HOME_ROWS_TOP - 84;
     for (int action = 1; action <= 2; action++) {
@@ -651,7 +653,7 @@ static void board_enter_k(Board *b) {
   if (b->kind == 1) { feat_fill(b); feat_arm(b); /* (the rows are where they stay: nothing lowered or dimmed on arrival) */ } /* arriving on the spotlight: the rows start where they will rest (no slide down after) */
   if (app_splash_done) timer_start(&b->fade, 0.5f); /* every switch to this tab: the rows rise in one after another (row_in) */
   for (int i = 0; i < b->n; i++) { slide_row(&b->rows[i]); tween_set(&b->rows[i].off, b->rows[i].off.to); }
-  tween_set(&b->hostY, 0); b->fastBg = 1; hero_soon(b, 70);
+  tween_set(&b->hostY, 0); hero_soon(b, 70);
 }
 static void board_leave(void) {
   for (int i = 0; i < 2; i++) { Board *b = &boards[i]; if (cur() == b) continue; /* another board: the last title leaves at once (its own will fade in) */
@@ -1024,7 +1026,7 @@ static void board_draw(void) {
     if (disc && r->filt) { filtI = i; filtY = y; y += h; continue; } /* (drawn after, where it stays) */
     /* a tab switch: each row in view rises 28 px and fades in, 50 ms after the one above (0.32 s each, the glide's curve) */
     float rk = 1, rdy = 0; if (b->fade.on) { float t = (timer_x(&b->fade) * 0.5f - 0.05f * (vis < 4 ? vis : 4)) / 0.38f; rk = ease_apply(EASE_CSS_EASEOUT, t < 0 ? 0 : t > 1 ? 1 : t); rdy = 28 * (1 - rk); }
-    int inView = r->a.v > 0.001f && y + b->hostY.v + sy < SB_H && y + h + b->hostY.v + sy > ROWS_TOP;
+    int inView = r->a.v > 0.001f && y + b->hostY.v + sy < SB_H && y + h + b->hostY.v + sy > clipTop;
     if (inView) { vis++; if (rdy > 0.01f) gfx_offset_push(0, rdy); row_draw(b, r, i, y, abs(i - b->rowIdx) <= 3, (r->filt ? 1 : ra0) * rk * r->a.v); if (rdy > 0.01f) gfx_offset_pop(); }
     else if (abs(i - b->rowIdx) <= 2) { int c0 = (int)(r->off.v / step_of(r)); row_prefetch(r, 2, c0 - 1, c0 + 7); } /* off screen but one or two presses away */
     y += h; }

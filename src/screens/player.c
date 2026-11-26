@@ -1,4 +1,5 @@
 #include "core/memtrim.h"
+#include "screens/streams.h"
 #include "core/tvtune.h"
 #include "core/submarks.h"
 #include "screens/player.h"
@@ -187,6 +188,7 @@ static double now_(void) { return app_now(); }
    steps visibly once the app has been running a while */
 static float clock_ph(double period) { return (float)fmod(now_() / period, 1.0); }
 int player_open(void) { return P.open; }
+int player_closing(void) { return P.open && P.closing; }
 int player_art_full(void) { return P.open && P.artA.v > 0.98f; } /* the loading art covers the screen */
 float player_cover(void) { return P.open ? P.in.v : 0; }
 /* the page under the player: while it covers it only partly, and while a logo flies between them over the art
@@ -2271,10 +2273,12 @@ int player_cast_state(double *pos, double *du, char *title, int cap) {
   *pos = video_time(); *du = dur();
   return vs == VID_ENDED ? 4 : vs == VID_ERROR ? 5 : paused() ? 3 : vs == VID_LOADING || vs == VID_BUFFERING ? 1 : 2;
 }
-static void finish_close(void) { if (hub_on() && hub_player_mode()) hub_close(); /* (one from Home stays: it is the page) */ { extern void detail_refresh_watched(void); detail_refresh_watched(); } /* the title page under it: its ticks as they are now */ sync_stop(0); gfx_target_free(&handSnap); mo_set(&handA, 0); if (!keepVideo) video_unload(); keepVideo = 0; /* (back into its preview: it plays on there) */ asssubs_close(); if (mkv) { prevspike_stop(); sp_close(); mkv_close(mkv); mkv = NULL; } p2p_player_closed(); p2pTok++; metaTok++; P.open = 0; P.closing = 0; if (P.meta) cJSON_Delete(P.meta); P.meta = NULL; subs_free(P.cues, P.ncues); free(P.ext); free(P.adx); srcs_free(); cols_clear(); memset(&P, 0, sizeof P); sub_reset(); free(extAss); extAss = NULL; app_refresh_boards(); }
+static void finish_close(void) { if (hub_on() && hub_player_mode()) hub_close(); /* (one from Home stays: it is the page) */ { extern void detail_refresh_watched(void); detail_refresh_watched(); } /* the title page under it: its ticks as they are now */ sync_stop(0); gfx_target_free(&handSnap); mo_set(&handA, 0); if (!keepVideo && !P.exitFade) video_unload(); keepVideo = 0; /* (back into its preview: it plays on there) */ asssubs_close(); if (mkv) { prevspike_stop(); sp_close(); mkv_close(mkv); mkv = NULL; } p2p_player_closed(); p2pTok++; metaTok++; app_player_input_reset(); P.open = 0; P.closing = 0; if (P.meta) cJSON_Delete(P.meta); P.meta = NULL; subs_free(P.cues, P.ncues); free(P.ext); free(P.adx); srcs_free(); cols_clear(); memset(&P, 0, sizeof P); sub_reset(); free(extAss); extAss = NULL; app_refresh_boards(); }
 static int closeNext, closeSim, closeArt; static double closeAt, closeT0; /* closeArt: closed on the loading screen (its line and words fade as the logo flies back) */
 static void close_player(int goNext, int goSim) {
   if (!P.open || P.closing) return; if (bestTok) { best_choose_cancel(bestTok); bestTok = 0; } P.closing = 1; ps_hold(0); sp_verify_reset(); np_stop(); NP.vid[0] = 0; /* (the next episode's pictures made so far: kept) */ /* (a lighter copy not taken yet: it reads on freely, nothing plays) */ closeArt = !P.live && P.artA.v > 0.999f; closeT0 = now_(); sx_begin_quick(0); /* the player's logo moves back to the page */ closeNext = goNext; closeSim = goSim; P.ssOn = 0; P.nx.tok = 0; P.sk.tok = 0;
+  app_player_input_reset();
+  if (streams_over_player()) streams_close(1);
   scrobble_player_end(video_time(), dur(), 0); save_progress(1); video_pause(); tvtune_stop(); mem_trim_soon(1.5, "the film closed"); /* (Test playback: nothing told, nothing kept) */
   /* the title's own picture fades back over the paused frame, the video goes, then the cover fades onto the app */
   closeAt = now_() + (closeArt ? 0.01 : 0.26); /* the cover fades back over the paused frame (see css()); from the loading screen the art fades at once, under the logo on its way back */
@@ -2486,7 +2490,7 @@ void player_tick(float dt) {
   if (P.tray.kind < 0 && !P.tray.openA.on && P.tray.openA.v <= 0.001f) { P.tray.kind = 0; cols_clear(); srcs_free(); } /* put away: its lists go too */
   mo_tick(&SR.y, dt); mo_tick(&SR.plY, dt); mo_tick(&SR.plH, dt); mo_tick(&SR.plA, dt); tm_tick(dt); tray_swap_step(); src_tick(dt);
   if (!P.prompt.k && P.prA.v <= 0.001f) P.shown.k = 0;
-  close_step(); if (P.closing) return;
+  if (P.closing) { close_step(); return; }
   if (P.resolving) { const char *st = p2p_status(); if (strcmp(st, status)) set_status(st); return; } /* the art: nothing for a few seconds, then why it is slow ("Finding peers…", "Getting the file list…") */
   VidState vs = video_state();
   /* Trakt: what plays, every frame (it decides when to tell; trailers and live broadcasts never) */

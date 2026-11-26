@@ -19,6 +19,7 @@ int  player_waiting(void);
 void player_choose_best(const char *type, const char *id, const char *vid);
 void player_cast_best(const char *type, const char *id, const char *vid, double pos); /* a phone's playbest: the same choice, then from pos (0: from the start) */
 int  player_open(void);
+int player_closing(void);
 int  player_nerd_lines(char (*out)[120], int max); /* Stats for nerds: what plays and how */
 int  player_art_full(void);
 int  player_live(void);           /* the picture is up: the window must be transparent */

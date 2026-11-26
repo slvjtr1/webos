@@ -318,15 +318,12 @@ static void clock_tick(void) {
 }
 /* a new minute: only the digits that changed crossfade, drifting a few px (the rest of the time stays still); the
    time sits from a fixed left edge so nothing beside the changing digits moves */
-static int clockLiquid; /* the bar's own clock: its glass bends the backdrop (the player's and the guide's: the glass alone) */
-static void lg_glass(float x, float y, float w, float h, float r, uint32_t tint, float k);
-static int lgSeed; /* the next piece's own timing (0 capsule, 1-2 the circles, 3 the clock), then 0 again */
-static float lgPushX, lgPushY, lgBase[4]; /* the next piece is taking up an edge push (its units; its rest shape), then none again */
-static float lg_drift_at(float ph);
+
+
 void app_clock_draw(float right, float y, float alpha) {
   static float W; static int w12 = -1; if (W <= 0 || w12 != app_clock_12()) { w12 = app_clock_12(); W = text_width(w12 ? "00:00 PM" : "00:00", 38, 600, -0.6f); } /* (the pill as wide as the format's longest time) */ float x0 = right - W; if (alpha < 1) gfx_opacity_push(alpha);
   { float ph = 76, pw = W + 52, px = x0 - 26, py = y + text_line_height(38) / 2 - ph / 2; /* a glass pill behind it, the bar's circles' sister */
-    if (clockLiquid) { lgSeed = 3; lg_glass(px, py, pw, ph, ph / 2, ACC, 0.85f); } else { lglass_light(lg_drift_at(113.0f)); lglass_shell(px, py, pw, ph, ph / 2, RGBA(14, 14, 22, 120), 0.85f); } lglass_light(0); }
+    gfx_rrect(px, py, pw, ph, ph / 2, TV_SURFACE); }
   { static float cw = -1, cwTo = -1; float tw = text_width(clockTxt, 38, 600, -0.6f); if (cw < 0) cw = tw; cwTo = tw; cw += (cwTo - cw) * fminf(1, DT * 8); x0 += (W - cw) / 2; } /* the time centred in its pill (gliding when its width changes) */
   float k = clockAnim.on ? ease_apply(EASE_IN_OUT, timer_x(&clockAnim)) : 1;
   size_t n = 0; if (k < 1) while (clockTxt[n] && clockTxt[n] == clockOld[n]) n++; else n = strlen(clockTxt);
@@ -337,7 +334,7 @@ void app_clock_draw(float right, float y, float alpha) {
     gfx_opacity_push(k); text_draw(clockTxt + n, x0 + pw, y + 5 * (1 - k), 38, 600, WHITE_A(230), -0.6f, 0, ALIGN_LEFT); gfx_opacity_pop(); }
   if (alpha < 1) gfx_opacity_pop();
 }
-static void clock_draw(void) { float W = text_width("00:00", 38, 600, -0.6f); clockLiquid = 1; app_clock_draw(app_rtl() ? 48 + W : SB_W - 48, 50 - 22, 1); clockLiquid = 0; }
+static void clock_draw(void) { float W = text_width("00:00", 38, 600, -0.6f); app_clock_draw(app_rtl() ? 48 + W : SB_W - 48, 50 - 22, 1); }
 
 /* ---- the top bar: centred tabs, the corner icons, one pill that glides to the focused tab ---- */
 TopNav topNav = { .idx = NAV_HOME };
@@ -427,48 +424,16 @@ static float search_fade(float sh) {
 /* liquid glass, drawn (no blur read back: the bar sits over moving backdrops and trailers): a tinted see-through
    body, a sheen from the top, the rim lit at the top-left and bottom-right as by a light at 135 degrees, and a soft
    shadow; k scales it all (0 none, 1 at rest, more when lit), tint is the accent */
-#define LG_H 112.0f /* the top bar glass strip's height (layout units) */
-static GLuint lg_tex(float x, float y, float w, float h, float *u0, float *v0, float *u1, float *v1);
-static void lg_tick(void);
-/* the light on the glass: a slow wander of its own (a few percent along the top, never still) */
-static float lg_drift_at(float ph) { float t = (float)NOW + ph; return 0.018f * sinf(t * 0.157f) + 0.012f * sinf(t * 0.263f + 1.3f) + 0.008f * sinf(t * 0.411f + 4.1f); } /* (three slow waves that never line up: a few percent, 15 to 40 s; ph sets each piece of glass apart) */
-static float lgSpotLean; /* the next piece's spot leaning along (the capsule's towards the focused tab), then none again */
-static void lg_glass(float x, float y, float w, float h, float r, uint32_t tint, float k) {
-  if (k <= 0.004f) { lgSpotLean = 0; lgSeed = 0; lgPushX = lgPushY = 0; return; }
-  float pxs = lgPushX, pys = lgPushY, pk = fminf(1, sqrtf(pxs * pxs + pys * pys) / 12); lgPushX = lgPushY = 0; /* how hard it is being pushed, 0..1 */
-  int small = w < 300; /* (the circles and the clock: a softer touch than the capsule) */
-  int sd = lgSeed < 0 ? 0 : lgSeed > 3 ? 3 : lgSeed; float spotK = 0, su = 0.5f, sv = 0.32f;
-  { float n = (float)lgSeed, t = (float)NOW * (1 + 0.13f * n) + 17.0f * n, p = 2.39f * n; /* each piece its own pace and phase */
-    su = 0.5f + 0.4f * (0.55f * sinf(t * 0.27f + p) + 0.3f * sinf(t * 0.43f + 2.0f + 1.7f * p) + 0.15f * sinf(t * 0.71f + 4.4f + 2.3f * p)) + lgSpotLean; sv = 0.32f + 0.1f * sinf(t * 0.33f + 1.0f + p);
-    spotK = (small ? 0.6f : 1.0f) * (1 + 0.7f * pk); lglass_light(su - 0.12f); lgSpotLean = 0; lgSeed = 0; } /* every piece of the bar's glass with its own wandering spot, on its own timing, its glint riding with it */
-  gfx_shadow(x, y + 12, w, h, r, 40, BLACK_A((int)(64 * fminf(k, 1))));
-  { float u0, v0, u1, v1; GLuint t = pk > 0 ? lg_tex(lgBase[0], lgBase[1], lgBase[2], lgBase[3], &u0, &v0, &u1, &v1) : lg_tex(x, y, w, h, &u0, &v0, &u1, &v1); /* the blurred page behind, drawn in at the edges as by a lens (pushed: the picture at rest, stretched with the glass) */
-    /* the picture behind changing (signing in, the start screen, the guide, a page of glows): the glass crossfades from the one it had, never a jump */
-    static GLuint curT[4], oldT[4]; static float oldUv[4][4], curUv[4][4], fadeK[4]; static unsigned long long seenF[4];
-    if (seenF[sd] + 2 < FRAME) { curT[sd] = t; fadeK[sd] = 0; } /* (not drawn a while: no fade from what it had then) */
-    else if (t != curT[sd]) { oldT[sd] = curT[sd]; memcpy(oldUv[sd], curUv[sd], sizeof oldUv[sd]); curT[sd] = t; fadeK[sd] = 1; } /* (from nothing too: out of the plain glass) */
-    seenF[sd] = FRAME; curUv[sd][0] = u0; curUv[sd][1] = v0; curUv[sd][2] = u1; curUv[sd][3] = v1; if (fadeK[sd] > 0) fadeK[sd] -= DT / 0.5f;
-    float pull = fminf(h * 0.5f, 30) * (1 + 0.5f * pk); /* (pushed harder, the lens bends more) */
-    float ok = fadeK[sd] > 0 ? fadeK[sd] * fadeK[sd] * (3 - 2 * fadeK[sd]) : 0;
-    if (t) { float na = oldT[sd] ? 1 : 1 - ok; if (na < 0.999f) { gfx_rrect(x, y, w, h, r, RGBA(16, 16, 24, (int)(fminf(110 * k, 200) * ok))); gfx_opacity_push(na); }
-      gfx_liquid_spot(su, sv, spotK); gfx_liquid(t, x, y, w, h, r, pull, fminf(k, 1), u0, v0, u1, v1); if (na < 0.999f) gfx_opacity_pop(); }
-    else gfx_rrect(x, y, w, h, r, RGBA(16, 16, 24, (int)(fminf(110 * k, 200) * (oldT[sd] ? 1 - ok : 1))));
-    if (ok > 0.004f && oldT[sd]) { gfx_opacity_push(ok); gfx_liquid_spot(su, sv, spotK); gfx_liquid(oldT[sd], x, y, w, h, r, pull, fminf(k, 1), oldUv[sd][0], oldUv[sd][1], oldUv[sd][2], oldUv[sd][3]); gfx_opacity_pop(); }
-    if (t || ok > 0.004f) gfx_rrect(x, y, w, h, r, RGBA(10, 10, 16, (int)(fminf(18 * k, 50)))); }
-  gfx_rrect(x, y, w, h, r, col_alpha(tint | 0xff000000u, 0.08f * k));
-  gfx_rrect_v(x, y, w, h, r, WHITE_A((int)(fminf(28 * k, 70))), WHITE_A(0));
-  gfx_ring(x, y, w, h, r, 1, WHITE_A((int)(fminf(34 * k, 90))));
-  lglass_rim(x, y, w, h, r, 0.10f * k * (1 + 0.4f * pk), (small ? 0.17f : 0.28f) * fminf(k, 1.4f) * (1 + 0.25f * pk), 1); lglass_rim(x, y, w, h, r, 0.05f * k, 0.30f * fminf(k, 1.4f), 0); /* (a soft light: the glint at half) */
-}
+
 
 static void corner_draw(int i, const char *icon, uint32_t dot, float rot) {
   float sh = i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0, sf = i == NAV_SEARCH ? search_fade(sh) : 1;
   if (sf <= 0.001f) return; if (sf < 0.999f) gfx_opacity_push(sf);
   float f = topNav.cornerF[i].v, x = topNav.chipX[i] + sh, y = 50 - 38;
   int nd = chipFocused(i); if (nd) gfx_offset_push(nudge_x(&topNav.nudge), nudge_y(&topNav.nudge)); /* the edge push moves the focused icon too */
-  lgSeed = 1 + i; lg_glass(x, y, 76, 76, 38, ACC, 0.85f + 0.3f * f); /* the bar's glass, as the capsule's (its own wandering spot), a little brighter lit */
+  gfx_rrect(x, y, 76, 76, 38, TV_SURFACE);
   if (f > 0.001f) { float s = 0.78f + 0.22f * topNav.cornerS[i].v; gfx_opacity_push(f); gfx_scale_push(s, s, x + 38, y + 38);
-    gfx_rrect_v(x, y, 76, 76, 38, col_alpha(ACC2 | 0xff000000u, 0.42f), col_alpha(ACC | 0xff000000u, 0.30f)); /* the accent */
+    gfx_ring(x, y, 76, 76, 38, 2, TV_FOCUS);
     gfx_scale_pop(); gfx_opacity_pop(); }
   static Tween lit[2]; tween_to(&lit[i], chipFocused(i) || chipCur(i) ? 1 : 0, 0.22f, EASE_CSS_EASE); tween_tick(&lit[i], DT); /* lit and back crossfaded, as the tabs' words are */
   uint32_t col = col_mix(WHITE_A(184), WHITE_A(255), lit[i].v);
@@ -635,6 +600,12 @@ static void vig_draw(int mode, uint32_t c, float yMax) {
       gfx_alpha_tex_uv(t, x0, y0, x1 - x0, y1 - y0, c, x0 / SB_W, y0 / SB_H, x1 / SB_W, y1 / SB_H); tx = e; } }
 }
 static void bg_picture(const BgLayer *l, float alpha) {
+  if (l->mode == 0 && l->aspect > 0) {
+    float w = fminf(SB_W, SB_H * l->aspect), h = w / l->aspect;
+    gfx_image(l->tex, (SB_W - w) / 2, (SB_H - h) / 2, w, h, 0,
+              WHITE_A((int)(255 * alpha + 0.5f)), 0, 0, 1, 1);
+    return;
+  }
   float u0, v0, u1, v1; img_cover_uv(l->aspect, SB_W / SB_H, 1, &u0, &v0, &u1, &v1);
   gfx_image(l->tex, 0, 0, SB_W, SB_H, 0, WHITE_A((int)(255 * 0.86f * alpha + 0.5f)), u0, v0, u1, v1);
 }
@@ -886,12 +857,19 @@ static int keyHeld; /* the key being handled is a repeat of a held one */
 int app_key_held(void) { return keyHeld; }
 static int okDown; /* OK is down (a key or the pointer's button) */
 int app_ok_down(void) { return okDown; }
+void app_player_input_reset(void) {
+  PTR.down = PTR.eatUp = PTR.eatOk = PTR.okPtr = PTR.hasHv = 0;
+  PTR.clickAt = PTR.okKeyAt = 0;
+  okDown = 0;
+  memset(&okHold, 0, sizeof okHold);
+}
 float app_hold_k(double at) { float x = (float)((NOW - at) * 1000 - 220) / (HOLD_MS - 220); return x < 0 ? 0 : x > 1 ? 1 : x; }
 static void key_core(int k, int down, int repeat) {
   if (down) keyHeld = repeat != 0;
   if (k == K_OK) okDown = down;
-  if (player_open() && streams_over_player()) { if (down && !(k == K_OK && repeat)) streams_over_key(k); return; } /* a channel's streams over the picture: the sheet has the keys */
-  if (player_open()) { if (!(k == K_OK && repeat && down)) player_key(k, down); return; }
+  if (player_closing() && (k == K_BACK || k == K_OK)) return;
+  if (player_open() && !player_closing() && streams_over_player()) { if (down && !(k == K_OK && repeat)) streams_over_key(k); return; } /* a channel's streams over the picture: the sheet has the keys */
+  if (player_open() && !player_closing()) { if (!(k == K_OK && repeat && down)) player_key(k, down); return; }
   if (!down) { if (k == K_OK) ok_up(); return; }
   /* the pointer appearing or hiding is the TV's own doing (it hides by itself, and shows when the remote is
      picked up): not input that stops the background trailer */
@@ -955,7 +933,7 @@ void app_tick(float dt) {
   if (okHold.down && !okHold.menu && (NOW - okHold.at) * 1000 >= HOLD_MS) { okHold.menu = 1; menuGuard = 1; orbs_pulse(ORB_HOLD, 1); if (app_card_menu_hook) app_card_menu_hook(&okHold.item); }
   timer_tick(&xin, dt); timer_tick(&xmvT, dt); timer_tick(&xoutT, dt);
   saver_tick(dt);
-  accent_tick(dt); tint_tick(); toast_tick(dt); clock_tick(); if (SCR == SCR_LOGIN || splash_signed_in()) login_glow_bake(); /* (the sign-in's glass: the glows under it) */ amb_bake(); topnav_tick(dt); bg_tick(dt); lg_tick(); sync_tick(); scrobble_tick(); tw_tick(); live_tick(); update_tick(dt); best_tick();
+  accent_tick(dt); tint_tick(); toast_tick(dt); clock_tick(); if (SCR == SCR_LOGIN || splash_signed_in()) login_glow_bake(); /* (the sign-in's glass: the glows under it) */ amb_bake(); topnav_tick(dt); bg_tick(dt); sync_tick(); scrobble_tick(); tw_tick(); live_tick(); update_tick(dt); best_tick();
   curKey = 0; /* (a page switch later in the frame is not a key's) */
   btr_tick(dt); lpk_tick(dt); welcome_tick(); { extern void supportcard_tick(void); supportcard_tick(); } lift_tick(dt); tabs_warm_tick();
   { static int greeted; if (!greeted && app_splash_done) { greeted = 1; sound_play(SND_START); } } /* start-up: one very faint sound */
@@ -1011,42 +989,7 @@ static void amb_bake(void) {
 }
 unsigned int app_ambient_glass_tex(void) { return ambTOk > 0 && ambTFresh ? ambT.tex : 0; }
 void app_ambient_draw(void) { if (ambGuide) ambient_draw(); } /* (the guide's, once a frame) */
-/* the top bar's glass: what lies under the bar (the backdrop) drawn at an
-   eighth of its size into a strip and lightly blurred, made again when the backdrop changes and each frame while it fades, never else */
-static GfxTarget lgS[3]; static int lgOk; static unsigned lgGen = ~0u; static int lgScr = -1; static double lgAt;
-/* a backdrop layer's top strip, at a: its own picture unshaded (else its baked one, upside down); never a bake here (a
-   second offscreen picture inside this one) */
-static void lg_layer(BgLayer *l, float a) {
-  if (a <= 0.002f || !l->url[0]) return;
-  if (l->bakedOk && !strcmp(l->bakedUrl, l->url)) { gfx_image(l->baked.tex, 0, 0, SB_W, LG_H, 0, WHITE_A((int)(255 * a + 0.5f)), 0, 1, 1, 1 - LG_H / SB_H); return; } /* the picture as it shows, shading and all: the glass is as dark as what is behind it */
-  if (l->tex && l->aspect > 0) { float u0, v0, u1, v1; img_cover_uv(l->aspect, SB_W / SB_H, 0, &u0, &v0, &u1, &v1); /* the picture itself, unshaded: the glass takes the backdrop's own colours (the page darkens its top for the words) */
-    gfx_image(l->tex, 0, 0, SB_W, LG_H, 0, WHITE_A((int)(255 * a + 0.5f)), u0, v0, u1, v0 + (v1 - v0) * (LG_H / SB_H)); return; }
-  if (!l->bakedOk || strcmp(l->bakedUrl, l->url)) return;
-  gfx_image(l->baked.tex, 0, 0, SB_W, LG_H, 0, WHITE_A((int)(255 * a + 0.5f)), 0, 1, 1, 1 - LG_H / SB_H); }
-static void lg_bake(void) {
-  int W = 960, H = 56, bw = 480, bh = 28; /* half size, lightly blurred: the glass shows the picture, softened, so its lens has something to bend */
-  int sw[3] = { W, bw, bw }, sh[3] = { H, bh, bh };
-  for (int i = 0; i < 3; i++) if (!lgS[i].fbo && !gfx_target_create(&lgS[i], sw[i], sh[i])) { lgOk = 0; return; }
-  float k = bgFade.on ? ease_apply(EASE_CSS_EASEOUT, timer_x(&bgFade)) : 1, rv = ease_apply(EASE_CSS_EASE, app_reveal_x(0.05f, 0.7f));
-  gfx_target_begin(&lgS[0], PAGE); /* the backdrop's two layers as bg_draw blends them */
-  if (bgFadingIn && bgFade.on) { lg_layer(&bgL[!bgTop], rv); lg_layer(&bgL[bgTop], k * rv); }
-  else if (bgFadingOut && bgFade.on) { lg_layer(&bgL[!bgTop], (1 - k) * rv); lg_layer(&bgL[bgTop], (1 - k) * rv); }
-  else lg_layer(&bgL[bgTop], rv);
-  gfx_target_end();
-  gfx_target_begin(&lgS[1], PAGE); gfx_image(lgS[0].tex, 0, 0, SB_W, LG_H, 0, WHITE_A(255), 0, 1, 1, 0); gfx_target_end();
-  gfx_blur_pass(&lgS[2], lgS[1].tex, bw, bh, 0, 1.0f); gfx_blur_pass(&lgS[1], lgS[2].tex, bw, bh, 1, 1.0f);
-  lgOk = 1; lgAt = NOW;
-}
-static void lg_tick(void) {
-  if (SCR == SCR_LOGIN || player_open()) return;
-  int want = !lgOk || lgGen != bgGen || lgScr != (int)SCR || bgFade.on || app_reveal_x(0.05f, 0.7f) < 1; /* (each frame while the backdrop fades: the glass fades with it) */
-  if (want) { lgGen = bgGen; lgScr = (int)SCR; lg_bake(); }
-}
-/* the strip's part under a box: its texture and uv (0 when there is none yet) */
-static GLuint lg_tex(float x, float y, float w, float h, float *u0, float *v0, float *u1, float *v1) {
-  if (SCR == SCR_LOGIN || splash_signed_in()) { GLuint g = login_glow_tex(); *u0 = x / SB_W; *u1 = (x + w) / SB_W; *v0 = 1 - y / SB_H; *v1 = 1 - (y + h) / SB_H; return g; } /* signing in: the glows */
-  if (welcome_is_open() || ((SCR == SCR_SET || SCR == SCR_SEARCH) && !app_overlay)) { GLuint g = app_ambient_glass_tex(); if (g) { *u0 = x / SB_W; *u1 = (x + w) / SB_W; *v0 = 1 - y / SB_H; *v1 = 1 - (y + h) / SB_H; return g; } } /* the glows' pages: the glows */
-  if (!lgOk) return 0; *u0 = x / SB_W; *u1 = (x + w) / SB_W; *v0 = 1 - y / LG_H; *v1 = 1 - (y + h) / LG_H; return lgS[1].tex; }
+
 static int *pgSnapReady, *pgSnapGone; /* (the page's picture under a growing preview: see app_draw) */
 static unsigned drawN, pgSnapAt; /* (the frame the picture was taken on: the move starts on the next one, never on that slow frame) */
 int app_snapshot_ready(void) { return (pgSnapReady && *pgSnapReady && drawN != pgSnapAt) || (pgSnapGone && *pgSnapGone); }
