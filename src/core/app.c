@@ -20,6 +20,7 @@
 #include "ui/glass.h"
 #include "screens/welcome.h"
 #include "ui/gfx.h"
+#include "ui/theme.h"
 #include "ui/text.h"
 #include "ui/img.h"
 #include "ui/icon.h"
@@ -133,9 +134,9 @@ float nudge_y(const Nudge *n) { return n->dy * nudge_k(n); }
 
 /* ---- accent ---- */
 uint32_t ACC, ACC2, ACC3, ACC_D, ACC_FG;
-const char *ACCENT_KEYS[18] = { "purple", "violet", "fuchsia", "pink", "rose", "red", "orange", "amber", "gold", "lime", "green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "graphite" };
+const char *ACCENT_KEYS[18] = { "white", "violet", "fuchsia", "pink", "rose", "red", "orange", "amber", "gold", "lime", "green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "graphite" };
 static const uint32_t ACCENTS[18][4] = {
-  { 0x8c5cff, 0xb794ff, 0xc9b8ff, 0x5b34e6 },
+  { 0xf5faff, 0xffffff, 0xa1a1a1, 0x121212 },
   { 0xa855f7, 0xd8b4fe, 0xe9d5ff, 0x7e22ce },
   { 0xd946ef, 0xf0abfc, 0xf5d0fe, 0xa21caf },
   { 0xec4899, 0xf9a8d4, 0xfbcfe8, 0xbe185d },
@@ -175,7 +176,7 @@ static void accent_tick(float dt) {
   ACC = col_mix(accFrom[0], accTo[0], k); ACC2 = col_mix(accFrom[1], accTo[1], k); ACC3 = col_mix(accFrom[2], accTo[2], k); ACC_D = col_mix(accFrom[3], accTo[3], k); ACC_FG = col_mix(accFrom[4], accTo[4], k);
 }
 uint32_t acc_a(float a) { return col_alpha(ACC, a); }
-static const char *accent_mode(void) { const char *a = store_get("accent", "logo"); if (!strcmp(a, "duo")) a = "adaptive"; return a; }
+static const char *accent_mode(void) { const char *a = store_get("accent", "white"); if (!strcmp(a, "duo")) a = "adaptive"; return a; }
 int accent_dynamic(void) { const char *a = accent_mode(); return !strcmp(a, "adaptive") || !strcmp(a, "logo"); }
 static const uint32_t *fixed_accent(void) { const char *a = accent_mode(); for (int i = 0; i < 18; i++) if (!strcmp(a, ACCENT_KEYS[i])) return ACCENTS[i]; return ACCENTS[0]; }
 /* a swatch made usable as an accent: its own hue and character, lightness/saturation brought into range */
@@ -459,15 +460,7 @@ static void lg_glass(float x, float y, float w, float h, float r, uint32_t tint,
   gfx_ring(x, y, w, h, r, 1, WHITE_A((int)(fminf(34 * k, 90))));
   lglass_rim(x, y, w, h, r, 0.10f * k * (1 + 0.4f * pk), (small ? 0.17f : 0.28f) * fminf(k, 1.4f) * (1 + 0.25f * pk), 1); lglass_rim(x, y, w, h, r, 0.05f * k, 0.30f * fminf(k, 1.4f), 0); /* (a soft light: the glint at half) */
 }
-/* the edge push (nowhere to go) taken up by the glass holding the focus: it bulges out the way it was pushed, a little
-   thinner across, and springs back with the push's rebound, so the focused pill never pokes out of it */
-static void lg_squish(float *x, float *y, float *w, float *h, float nx, float ny) {
-  lgBase[0] = *x; lgBase[1] = *y; lgBase[2] = *w; lgBase[3] = *h; lgPushX = nx; lgPushY = ny; /* the picture in it stretches with it (lg_glass) */
-  float gx = fabsf(nx) * 0.85f, gy = fabsf(ny) * 0.85f;
-  if (nx > 0) *w += gx; else if (nx < 0) { *x -= gx; *w += gx; }
-  if (ny > 0) *h += gy; else if (ny < 0) { *y -= gy; *h += gy; }
-  float qx = fabsf(nx) * 0.3f, qy = fabsf(ny) * 0.4f; *y += qx; *h -= 2 * qx; *x += qy; *w -= 2 * qy;
-}
+
 static void corner_draw(int i, const char *icon, uint32_t dot, float rot) {
   float sh = i == NAV_SEARCH ? update_search_shift(topNav.chipX[NAV_SEARCH], topNav.chipX[NAV_SET]) : 0, sf = i == NAV_SEARCH ? search_fade(sh) : 1;
   if (sf <= 0.001f) return; if (sf < 0.999f) gfx_opacity_push(sf);
@@ -505,30 +498,17 @@ void topnav_draw(void) {
   if (!signin) {
     /* its first appearance (the app opening, a sign-in): the capsule opens out of Home, Discover and Library gliding
        out from under it as they come in, Search and Settings just after (an Android app opening from its place) */
-    float op = ease_apply(EASE_SNAP, app_reveal_x(0.05f, 0.6f)), opT = ease_apply(EASE_SNAP, app_reveal_x(0.15f, 0.5f)), opC = app_reveal_x(0.3f, 0.4f);
+    float opT = ease_apply(EASE_SNAP, app_reveal_x(0.15f, 0.5f)), opC = app_reveal_x(0.3f, 0.4f);
     float hx0 = topNav.chipX[NAV_HOME] - 8, hx1 = topNav.chipX[NAV_HOME] + topNav.chipW[NAV_HOME] + 8, hc = (hx0 + hx1) / 2;
-    /* the tabs' capsule: one piece of glass behind the three, brighter while the bar has the focus */
-    { static Tween lit; tween_to(&lit, topNav.active ? 1 : 0, 0.3f, EASE_CSS_EASE); tween_tick(&lit, DT);
-      float cx0 = topNav.chipX[NAV_DISC] - 8, cx1 = topNav.chipX[NAV_LIB] + topNav.chipW[NAV_LIB] + 8;
-      { static float lean; float want = topNav.active && topNav.idx >= NAV_DISC ? ((topNav.px.v + topNav.pw.v / 2 - cx0) / (cx1 - cx0) - 0.5f) * 0.12f : 0; lean += (want - lean) * fminf(1, DT * 0.8f); /* the light leans a little towards the focused tab, slowly */
-        lgSpotLean = lean; }
-      { float gx = hx0 + (cx0 - hx0) * op, gy = 50 - 39, gw = (hx1 - hx0) + ((cx1 - cx0) - (hx1 - hx0)) * op, gh = 78; if (topNav.active && topNav.idx >= NAV_DISC) lg_squish(&gx, &gy, &gw, &gh, nx, ny); /* the focus pushed against the end: the capsule bulges with it */
-        lg_glass(gx, gy, gw, gh, gh / 2, ACC, 0.85f + 0.3f * lit.v); }
-      /* the current tab, when the focus is elsewhere: a softer piece of glass inside it */
-      static Tween mk[3]; /* (only while the focus is out of the bar: moving to Search or Settings, nothing is left lit on the tabs) */
-      for (int i = NAV_DISC; i <= NAV_LIB; i++) { tween_to(&mk[i - NAV_DISC], chipCur(i) && !topNav.active ? 1 : 0, 0.2f, EASE_CSS_EASE); tween_tick(&mk[i - NAV_DISC], DT); }
-      for (int i = NAV_DISC; i <= NAV_LIB; i++) { float a = mk[i - NAV_DISC].v; if (a > 0.01f) { gfx_opacity_push(a); gfx_rrect(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, WHITE_A(20)); gfx_ring(topNav.chipX[i], 50 - 30, topNav.chipW[i], 60, 30, 1, WHITE_A(46)); gfx_opacity_pop(); } } }
-    /* the focus: liquid accent glass that stretches as it glides and settles back round (its speed, smoothed) */
-    float pa = topNav.pill.v; if (pa > 0.001f) { static float lastX, sv, dir; float x = topNav.px.v, w = topNav.pw.v, h = 62, r = 31; float x0 = lastX; lglass_stretch(&sv, &lastX, x, DT); if (fabsf(x - x0) > 0.01f) dir = x > x0 ? 1 : -1; /* 0..1, and which way */
-      float sw = w * (1 + 0.22f * sv), sh = h * (1 - 0.10f * sv), px = x + w / 2 - sw / 2, py = 50 - sh / 2;
-      gfx_opacity_push(pa); gfx_offset_push(nx, ny);
-      { float u0, v0, u1, v1; GLuint t = lg_tex(px, py, sw, sh, &u0, &v0, &u1, &v1); if (t) { float lag = (-dir * sv * 7.0f + 1.2f * sinf((float)NOW * 0.9f)) / SB_W, wob = 0.8f * sinf((float)NOW * 0.7f + 1) / LG_H; /* the picture in it lags a few units the way it moves, a tiny wobble at rest */
-        gfx_liquid(t, px, py, sw, sh, sh / 2, fminf(sh * 0.6f, 36) * (1 + 0.25f * sv), 1, u0 + lag, v0 - wob, u1 + lag, v1 - wob); } } /* (a stronger lens: it is the drop of glass that moves, stronger still while it moves) */
-      gfx_rrect_v(px, py, sw, sh, sh / 2, col_alpha(ACC2 | 0xff000000u, 0.46f), col_alpha(ACC | 0xff000000u, 0.36f));
-      gfx_rrect_v(px, py, sw, sh, sh / 2, WHITE_A(40), WHITE_A(0)); gfx_clip_push(px, py, sw, sh); gfx_alpha_tex(gfx_radial_tex(), px + sw * 0.15f, py - sh * 0.6f, sw * 0.7f, sh, WHITE_A(55)); gfx_clip_pop();
-      gfx_rrect_h(px, py, sw, sh, sh / 2, WHITE_A(34), WHITE_A(0)); /* the sheen crossing it corner to corner */
-      gfx_ring(px, py, sw, sh, sh / 2, 1.5f, col_alpha(col_mix(ACC2 | 0xff000000u, 0xffffffffu, 0.55f), 0.85f)); gfx_ring(px + 1.5f, py + 1.5f, sw - 3, sh - 3, sh / 2 - 1.5f, 1, WHITE_A(30)); (void)r; /* the thin glassy edge in the accent's light */
-      gfx_offset_pop(); gfx_opacity_pop(); }
+    for (int i = NAV_DISC; i <= NAV_LIB; i++) {
+      if (chipCur(i) && !topNav.active)
+        gfx_rrect(topNav.chipX[i], 20, topNav.chipW[i], 60, 30, TV_FOCUS);
+    }
+    if (topNav.pill.v > 0.001f) {
+      gfx_opacity_push(topNav.pill.v);
+      gfx_rrect(topNav.px.v + nx, 19 + ny, topNav.pw.v, 62, 31, TV_FOCUS);
+      gfx_opacity_pop();
+    }
     for (int i = NAV_DISC; i <= NAV_LIB; i++) {
       int cur = chipCur(i), f = chipFocused(i); float x = topNav.chipX[i], w = topNav.chipW[i];
       int opening = i != NAV_HOME && opT < 0.999f; if (opening) { gfx_offset_push((1 - opT) * (hc - (x + w / 2)), 0); gfx_opacity_push(opT); } /* (from under Home) */
@@ -536,7 +516,7 @@ void topnav_draw(void) {
       { static Tween em[3]; Tween *e = &em[i - NAV_DISC]; tween_to(e, f || (cur && !topNav.active) ? 1 : 0, 0.22f, EASE_CSS_EASE); tween_tick(e, DT); /* bold while focused, or the page shown with the focus elsewhere: crossfaded both ways */
         float ty = 50 - text_line_height(32) / 2.0f, k = e->v;
         if (k < 0.999f) text_draw(chipLabel(i), x + w / 2, ty, 32, 400, WHITE_A((int)(184 * (1 - k))), 0, 0, ALIGN_CENTER);
-        if (k > 0.001f) text_draw(chipLabel(i), x + w / 2, ty, 32, 700, WHITE_A((int)(255 * k)), 0, 0, ALIGN_CENTER); }
+        if (k > 0.001f) text_draw(chipLabel(i), x + w / 2, ty, 32, 700, col_alpha(TV_NEARBLACK, k), 0, 0, ALIGN_CENTER); }
       if (f) gfx_offset_pop();
       if (opening) { gfx_opacity_pop(); gfx_offset_pop(); }
     }
@@ -658,7 +638,7 @@ static void bg_picture(const BgLayer *l, float alpha) {
   float u0, v0, u1, v1; img_cover_uv(l->aspect, SB_W / SB_H, 1, &u0, &v0, &u1, &v1);
   gfx_image(l->tex, 0, 0, SB_W, SB_H, 0, WHITE_A((int)(255 * 0.86f * alpha + 0.5f)), u0, v0, u1, v1);
 }
-static void bg_shading(int mode, float alpha) { vig_draw(mode, RGBA(12, 11, 17, (int)(255 * alpha + .5f)), SB_H); }
+static void bg_shading(int mode, float alpha) { vig_draw(mode, RGBA(0, 0, 0, (int)(255 * alpha + .5f)), SB_H); }
 /* the layer as one opaque picture: shading a mix of two pictures is the mix of the two shaded
    pictures, so each layer carries its own shading and the crossfade stays exact */
 static int bg_bake(BgLayer *l) {

@@ -80,7 +80,7 @@ static const Opt SPOILO[] = { { "off", "Off" }, { "blur", "Blur pictures" }, { "
 static const Opt BGS[] = { { "0", "None" }, { "1", "Solid" }, { ".6", "Transparent" } };
 static const Opt ASSO[] = { { "styled", "Styled" }, { "plain", "Plain" } };
 static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" }, { "5", "5 min" }, { "10", "10 min" } };
-static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
+static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "white", "White" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 12
 #define MAXROWS 48
 static Setting playBase[17], playS[13], seekS[6], subsBase[14], subsS[14], audS[7], picS[2], lookS[6], langS[44], langOpt, keyS[4], traktS[6], addonS[40], acctS[1], supS[12];
@@ -280,7 +280,7 @@ static void build(void) {
   set_s(&audS[3], "uiSoundVol", "Interface sound level", "Of the TV\xe2\x80\x99s volume", UIVOL, 8, "10");
   set_s(&picS[0], "animeEnhance", "Anime upscale", "The TV\xe2\x80\x99s own picture processors set for drawn pictures while anime plays: D the lightest, A the strongest. Costs the app nothing", UPO, 5, "B");
   set_s(&picS[1], "filmEnhance", "Film upscale", "The same for films and series: more detail from the TV\xe2\x80\x99s Super Resolution and sharpness. D the lightest, A the strongest", UPO, 5, "off");
-  set_s(&lookS[0], "accent", "Accent colour", "Dynamic: the colours of the title you open", ACCENT_OPTS, 20, "logo"); /* first, right under its picture */
+  set_s(&lookS[0], "accent", "Accent colour", "Dynamic: the colours of the title you open", ACCENT_OPTS, 20, "white"); /* first, right under its picture */
   set_s(&lookS[2], "clockFormat", "Clock", "24-hour or 12-hour time, everywhere the app shows it", CLOCKO, 2, "24");
   set_s(&lookS[3], "spoilers", "Spoilers", "", SPOILO, 3, "off"); /* the episodes not watched yet: their stills blurred, and their descriptions too if asked */
   set_s(&lookS[1], "ssDelay", "Screensaver", "After a while without a key, the titles of the moment fill the screen", SS_OPTS, 5, "5");
@@ -366,7 +366,7 @@ int settings_apply_pref(const char *k, const char *v) {
 }
 static void ab_tick(void) {
   { static int prevRow; if (!prevRow && prev_available()) { prevRow = 1; play_layout(); S.dirty = 1; } } /* (its library was looked at in the background: the row comes in once that is known) */
-  { const char *m = store_get("accent", "logo"), *d = !strcmp(m, "logo") ? "Dynamic: the colours of the logo of the title you open" : !strcmp(m, "adaptive") ? "Dynamic: the colours of the poster of the title you open" : "One colour everywhere in the app"; /* the accent row says what its choice does */
+  { const char *m = store_get("accent", "white"), *d = !strcmp(m, "logo") ? "Dynamic: the colours of the logo of the title you open" : !strcmp(m, "adaptive") ? "Dynamic: the colours of the poster of the title you open" : "One colour everywhere in the app"; /* the accent row says what its choice does */
     if (strcmp(lookS[0].ds, d)) { snprintf(lookS[0].ds, sizeof lookS[0].ds, "%s", d); S.dirty = 1; } }
   best_tick();
   /* (the row's words are made here, translated, with the kept speed in them) */
@@ -824,7 +824,7 @@ static void preview_keys(float x, float y, float w, float h) {
 static Tween lookShift; /* the page's row moving aside for the title's picture (the dynamic modes) */
 static Item lookIt[4]; static char lookLogo[4][512]; static int lookN = -1; static Tween lookSel; static int lookSelSet; static uint32_t lookFrom[2], lookTo[2]; static double lookAt; static int lookCur = -1;
 static void preview_look(float x, float y, float w, float h) {
-  const char *a = store_get("accent", "logo"); int rtl = app_rtl(), dyn = !strcmp(a, "logo") || !strcmp(a, "adaptive"), logoMode = !strcmp(a, "logo"); float t = (float)app_now();
+  const char *a = store_get("accent", "white"); int rtl = app_rtl(), dyn = !strcmp(a, "logo") || !strcmp(a, "adaptive"), logoMode = !strcmp(a, "logo"); float t = (float)app_now();
   if (lookN <= 0) { static double tried; if (app_now() - tried > 1.5) { char rn[8]; tried = app_now(); lookN = board_sample(lookIt, 4, rn, 0); for (int i = 0; i < lookN; i++) sb_logo_of(&lookIt[i], lookLogo[i], sizeof lookLogo[i]); } }
   /* the colour shown: the accent, or (dynamic) each title's own in turn; a title still being read keeps the last one */
   static const uint32_t STAND[4][2] = { { 0xffe0634a, 0xffffa38f }, { 0xff3d8bfd, 0xff9cc4ff }, { 0xff19b38a, 0xff7fe3c6 }, { 0xffd4a017, 0xfff3d27a } }; /* (while a title's own colour is read) */

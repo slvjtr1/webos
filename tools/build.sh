@@ -51,6 +51,7 @@ if os.path.isfile(src):
     for ln in open(src):
         ln = ln.strip()
         if ln and not ln.startswith('#') and '=' in ln: k, v = ln.split('=', 1); kv[k.strip()] = v.strip().strip('"\'')
+if os.environ.get('SB_NO_TRAKT') == '1': kv.pop('TRAKT_CLIENT_ID', None)
 def arr(name):
     v = kv.get(name, '').encode(); pad = hashlib.sha256(b'sb:' + name.encode()).digest()
     return 'static const unsigned char SBK_%s[] = { %s0 }, SBK_%s_PAD[32] = { %s };\n#define SBK_%s_LEN %d\n' % (name, ''.join('%d,' % (c ^ pad[i % 32]) for i, c in enumerate(v)), name, ','.join(str(x) for x in pad), name, len(v))

@@ -71,7 +71,7 @@ static const char *loc_name(int l) { return l == LOC_FLASH ? "flash" : l == LOC_
 static int relocating; static volatile int relocReady; static Prof relocTo; static double relocAt, relocLook; static unsigned relocSerial;
 
 /* the one torrent being resolved / played */
-static struct { int on; char ih[41], magnet[4096]; int want, se, ep, ab; uint32_t idx; uint64_t size; double t0; P2pCb cb; void *ud; char status[256]; int stage; } R;
+static struct { int on; char ih[41], magnet[4096]; int want, se, ep, ab; uint32_t idx; uint64_t size; double t0, nextMetadataPoll; P2pCb cb; void *ud; char status[256]; int stage; } R;
 /* the active one, for stats, pacing and the reason line */
 static struct { char ih[41]; uint64_t size, lastBytes; double lastT, rate, dur, bps; int calm, gentle, playedOnce; double startT0, stallT0, lastWatch, lastReason, reasonLogT, lastReport; int reasonKind; char reason[200]; double usbSaidAt; uint64_t refetchSeen; } A; /* usbSaidAt: when the storage hint was last said (once in 10 min at most); refetchSeen: the engine's refetched pieces at the last look */
 
@@ -521,6 +521,10 @@ void p2p_pump(void) {
   if (R.stage == 0) { if (E->open(R.magnet, R.ih)) { fail(T("Couldn’t start the torrent engine")); return; } R.stage = 1; }
   snprintf(R.status, sizeof R.status, "%s", p2p_wait_reason(1)); /* the art's line: nothing while it is quick, then why it is slow */
   if (R.stage == 1) {
+    /* Metadata discovery runs in the engine. Poll at most ten times per second
+       while waiting for peers instead of querying it on every UI frame. */
+    if (t < R.nextMetadataPoll) return;
+    R.nextMetadataPoll = t + 0.1;
     static sbe_file files[512]; int n = E->files(R.ih, files, 512);
     if (n == -2) { fprintf(stderr, "[p2p] %s: %s\n", R.ih, E->error(R.ih)); E->remove(R.ih); fail(T("No peers found for this torrent")); return; }
     if (n < 0) return; /* no file list yet: it keeps looking, the line says so */

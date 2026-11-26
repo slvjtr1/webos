@@ -1,6 +1,6 @@
 {
   "id": "tv.stremioorigin.app",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "vendor": "Stremio Origin",
   "type": "native",
   "main": "stremioorigin",
@@ -9,7 +9,7 @@
   "largeIcon": "largeIcon.png",
   "bgImage": "bgImage.png",
   "imageForRecents": "imageForRecents.png",
-  "bgColor": "#0c0b11",
+  "bgColor": "#000000",
   "iconColor": "#1a1430",
   "resolution": "1920x1080",
   "requiredPermissions": ["all", "settings.query", "systemconfig.query", "application.launcher", "physicaldevice.query"],

@@ -13,6 +13,7 @@
 #include "ui/glass.h"
 #include "ui/icon.h"
 #include "ui/gfx.h"
+#include "ui/theme.h"
 #include "ui/shared.h"
 #include "ui/text.h"
 #include "ui/img.h"
@@ -29,6 +30,7 @@
 #define MAXROWS 128 /* every installed catalog has its row (the answers' tokens carry the row in 7 bits) */
 #define FEAT_ROW (MAXROWS - 1) /* a token's row for a spotlight title */
 #define ROWS_TOP 478.0f             /* a focused row ends ~80 px above the bottom edge */
+#define HOME_ROWS_TOP 630.0f
 #define HERO_X 48.0f
 #define HERO_Y 100.0f
 #define HERO_W (SB_W * 0.52f)
@@ -66,6 +68,7 @@ typedef struct {
   Item feat[NFEAT]; int nfeat, featIdx, featOn, featLoad, featGotM, featGotS; ItemList featM, featS; double featAt, featArmAt; int swDir; /* featArmAt: when its timer started (the current dot fills up to featAt); swDir: the way the last move went */
   Tween spotY, rowsA, spotA, dotsA, dotW[NFEAT]; int heroSpot, dotsWant; double dotsGo; char scoped[SB_ID];
   Tween hostY; Timer1 fade; Nudge nudge; int ptrHold, holdRow; /* the pointer moves the focus: the rows stay where they are (as for holdRow) until a key */
+  int heroAction; /* 0: catalog, 1: watch or resume, 2: details */
   double heroAt, fadeHold; int heroPending, fastBg; /* fadeHold: the fade-in waits (a moment at most) for the whole description */
   /* the hero, in one path: fade out, gather (details, translation, logo: 0.45 s at most), put in, fade in; anything
      better that arrives later comes in with one more fade */
@@ -80,7 +83,7 @@ static Board *cur(void) { return SCR == SCR_HOME ? &boards[0] : SCR == SCR_DISC 
 static int spotOn(Board *b) { return b->kind == 1 && b->featOn; }
 static int filtOn(Board *b) { return b->kind == 1 && !b->featOn && b->rowIdx >= 0 && b->rowIdx < b->n && b->rows[b->rowIdx].filt; } /* the filter strip has the focus */
 static int spotLike(Board *b) { return spotOn(b) || filtOn(b); } /* the spotlight stays up: on it, or on the strip under its dots */ /* the spotlight has the focus (its titles may still be on the way) */
-static int focusOn(Board *b) { return cur() == b && !topNav.active && !spotOn(b); }
+static int focusOn(Board *b) { return cur() == b && !b->heroAction && !topNav.active && !spotOn(b); }
 #define RD_D 178.0f /* a live badge's diameter */
 static float card_w(const Row *r) { return r->round ? RD_D : r->wide ? RW_W : r->grid ? GC_W : RC_W; }
 static float card_h(const Row *r) { return r->round ? RD_D : r->wide ? RW_H : r->grid ? GC_H : RC_H; }
@@ -345,16 +348,29 @@ static void on_meta(cJSON *m, void *ud) {
 static void meta_ask(Board *b, int row, int col) { Item *it = item_at(b, row, col); if (!it || !it->id[0]) return; /* (the details also when the catalog gave words: their facts are the title page's) */
   sb_meta(it->type, it->id, on_meta, (void *)(uintptr_t)(((uintptr_t)(b - boards) << 31) | ((uintptr_t)row << 20) | ((uintptr_t)(col & 0xfff) << 8) | (uintptr_t)(b->gen & 0xff))); }
 static void logo_src(const Item *it, char *out, size_t cap) { const TmdbLoc *L = tmdb_loc(it->type, it->id, 1); if (L && L->logo && L->logo[0]) snprintf(out, cap, "%s", L->logo); else sb_logo_of(it, out, cap); }
-/* the text art of the titles the hero may show next, asked for well before (at the exact size it is drawn: one
-   decode, ready when the hero changes): every spotlight title, and the cards around the focus in its row and the
-   rows next to it. Asked again every half second, so translated art that turns up later is fetched too and what
-   is near stays recently used */
+/* Keep likely hero logos warm without filling the priority queue while scrolling. */
 static void logos_ahead(Board *b, int force) {
-  static double at[2]; double now = app_now(); int bi = (int)(b - boards); if (!force && now - at[bi] < 0.5) return; at[bi] = now;
-  char lu[512];
-  for (int i = 0; i < b->nfeat; i++) { logo_src(&b->feat[i], lu, sizeof lu); if (lu[0]) img_prefetch_pri(lu, 520, 175); }
-  for (int ri = b->rowIdx - 1; ri <= b->rowIdx + 2; ri++) { if (ri < 0 || ri >= b->n || b->rows[ri].hidden) continue; Row *r = &b->rows[ri];
-    for (int c = r->col - 2; c <= r->col + 8; c++) { if (c < 0 || c >= r->items.n) continue; logo_src(&r->items.items[c], lu, sizeof lu); if (lu[0]) img_prefetch_pri(lu, 520, 175); } }
+  static double at[2];
+  double now = app_now();
+  int bi = (int)(b - boards);
+  if (!force && (b->heroPending || now - at[bi] < 0.5)) return;
+  at[bi] = now;
+  char logo[512];
+  if (spotOn(b) && b->nfeat) {
+    for (int d = 0; d < 2 && d < b->nfeat; d++) {
+      logo_src(&b->feat[(b->featIdx + d) % b->nfeat], logo, sizeof logo);
+      if (logo[0]) img_prefetch_pri(logo, 520, 175);
+    }
+    return;
+  }
+  if (b->rowIdx < 0 || b->rowIdx >= b->n) return;
+  Row *row = &b->rows[b->rowIdx];
+  int radius = img_budget_mb() >= 80 ? 2 : 1;
+  for (int c = row->col - radius; c <= row->col + radius; c++) {
+    if (c < 0 || c >= row->items.n) continue;
+    logo_src(&row->items.items[c], logo, sizeof logo);
+    if (logo[0]) img_prefetch_pri(logo, 520, 175);
+  }
 }
 /* a channel or All channels: no film details to wait for, a logo worth waiting for (never its name first), slower softer fades */
 static int hero_live(const Item *it) { return live_type(it->type) || !strcmp(it->id, LIVE_ALL_ID); }
@@ -538,6 +554,23 @@ static GLuint scrim_tex(void) {
     float a = d < .55f ? .62f - (.62f - .34f) * d / .55f : d < 1 ? .34f * (1 - (d - .55f) / .45f) : 0; px[y * N + x] = (unsigned char)(a * 255 + .5f); }
   t = gfx_tex_create(px, N, N, 1, 1); return t;
 }
+static int hero_actions_available(const Item *it) {
+  return it && (!strcmp(it->type, "movie") || !strcmp(it->type, "series"));
+}
+static void hero_button_focus(int action, int unused) {
+  Board *b = cur();
+  if (b && !b->kind) { topNav.active = 0; b->heroAction = action; }
+}
+static void hero_button_open(int action, int unused) {
+  Board *b = cur();
+  const Item *it = b ? focused_of(b) : NULL;
+  if (!hero_actions_available(it)) return;
+  if (action == 1 && it->cw) { app_open_item(it); return; }
+  DetailParams p = {0};
+  p.it = *it;
+  p.openStreams = action == 1;
+  app_go(SCR_DETAIL, &p, 0);
+}
 static void hero_draw(Board *b) {
   float melt = btr_melt(), ta = 1 - (b->kind == 1 ? 0.81f : 0.22f) * melt, ma = 1 - 0.9f * melt; /* the trailer: the title stays at .78 (Discover's big one goes with the rows), the rest .1 */
   if (b->kind == 1 && b->spotA.v > 0.001f) gfx_alpha_tex(scrim_tex(), 110, 96, SB_W - 220, 400, RGBA(12, 11, 17, (int)(255 * b->spotA.v))); /* painted once, one quad */
@@ -591,6 +624,22 @@ static void hero_draw(Board *b) {
     gfx_opacity_pop(); gfx_offset_pop(); gfx_opacity_pop(); return; } /* (the box is drawn on its own, above) */
   y += 20; meta_draw_p(&hl->mp, x, y, WHITE_A(255), align); y += text_line_height(META_PX) > 34 ? text_line_height(META_PX) : 34;
   y += 16; text_draw_wrapped(v->desc, x, y, HERO_W, 3, DESC_PX, 400, WHITE_A(204), 0, align, DESC_LH);
+  if (hero_actions_available(&b->hero) && !strcmp(b->hero.id, v->id)) {
+    float edge = x, by = HOME_ROWS_TOP - 84;
+    for (int action = 1; action <= 2; action++) {
+      const char *label = action == 2 ? T("Details") : b->hero.cw ? T("Resume") : T("Watch");
+      float width = text_width(label, 28, 700, 0) + 60;
+      float bx = rtl ? edge - width : edge;
+      int selected = b->heroAction == action && !topNav.active;
+      gfx_rrect(bx, by, width, 58, 29, selected ? TV_FOCUS : TV_SURFACE);
+      text_draw(label, bx + width / 2, by + (58 - text_line_height(28)) / 2, 28, 700,
+                selected ? TV_NEARBLACK : WHITE_A(255), 0, 0, ALIGN_CENTER);
+      const Item *current = focused_of(b);
+      if (cur() == b && current && !strcmp(current->id, v->id))
+        hit_add(bx, by, width, 58, hero_button_focus, hero_button_open, action, 0);
+      edge += (rtl ? -1 : 1) * (width + 16);
+    }
+  }
   gfx_opacity_pop();
   gfx_offset_pop(); gfx_opacity_pop();
 }
@@ -639,6 +688,15 @@ static void move_h(Board *b, int dir) {
 }
 static void spot_leave(Board *b) { b->featOn = 0; b->featAt = 0; if (b->scoped[0]) { b->scoped[0] = 0; accent_scope(NULL, NULL, NULL); } }
 static int board_key(Board *b, int k) {
+  if (b->heroAction && !hero_actions_available(focused_of(b))) b->heroAction = 0;
+  if (b->heroAction) {
+    if (k == K_UP || k == K_BACK) { b->heroAction = 0; topnav_focus(); }
+    else if (k == K_DOWN) b->heroAction = 0;
+    else if (k == K_LEFT || k == K_RIGHT) b->heroAction = k == K_RIGHT ? 2 : 1;
+    else if (k == K_OK) hero_button_open(b->heroAction, 0);
+    else return 0;
+    return 1;
+  }
   if (b->ptrHold) { b->ptrHold = 0; Row *hr = b->rowIdx >= 0 && b->rowIdx < b->n ? &b->rows[b->rowIdx] : NULL; if (hr) slide_row(hr); } /* a key: the rows follow the focus again */
   if (spotOn(b)) { feat_fill(b);
     if (k == K_LEFT || k == K_RIGHT) { feat_go(b, k == K_RIGHT ? 1 : -1); sound_focus(); return 1; } /* a move by hand taps; the dots stepping by themselves do not */
@@ -653,7 +711,7 @@ static int board_key(Board *b, int k) {
   if (k == K_RIGHT) move_h(b, 1);
   else if (k == K_LEFT) move_h(b, -1);
   else if (k == K_DOWN) { int n = first_visible_row(b, b->rowIdx + 1, 1); if (n >= 0) { grid_carry(b, b->rowIdx, n); b->rowIdx = n; hero_soon(b, 150); disc_more(b); } else nudge_start(&r->nudge, K_DOWN); }
-  else if (k == K_UP) { int n = first_visible_row(b, b->rowIdx - 1, -1); if (n >= 0) { grid_carry(b, b->rowIdx, n); b->rowIdx = n; hero_soon(b, 150); } else if (b->kind == 1) { b->featOn = 1; hero_soon(b, 150); feat_arm(b); } else topnav_focus(); }
+  else if (k == K_UP) { int n = first_visible_row(b, b->rowIdx - 1, -1); if (n >= 0) { grid_carry(b, b->rowIdx, n); b->rowIdx = n; hero_soon(b, 150); } else if (b->kind == 1) { b->featOn = 1; hero_soon(b, 150); feat_arm(b); } else if (hero_actions_available(focused_of(b))) b->heroAction = 1; else topnav_focus(); }
   else if (k == K_OK) { const Item *it = focused_of(b); if (it) app_open_item(it); }
   else if (k == K_BACK && b->kind == 1 && r->grid) { int f = 0; while (f < b->n && !b->rows[f].filt) f++; if (f >= b->n) return 0; /* Discover's grid: Back goes to its top, the first pill (Back there: the bar) */
     b->rowIdx = f; b->rows[f].col = 0; hero_soon(b, 150); }
@@ -664,11 +722,11 @@ static int board_key(Board *b, int k) {
 }
 static int key_home(int k) { return board_key(&boards[0], k); }
 static int key_disc(int k) { return board_key(&boards[1], k); }
-static const Item *focused_cur(void) { Board *b = cur(); return b ? focused_of(b) : NULL; }
+static const Item *focused_cur(void) { Board *b = cur(); return b && !b->heroAction ? focused_of(b) : NULL; }
 /* the pointer on a card: the highlight moves there, the row follows as for the arrows */
 static void card_focus(int r, int c) { Board *b = cur(); if (!b || r >= b->n) return; Row *row = &b->rows[r]; if (c >= row->items.n) return; int was = topNav.active; if (!was && !spotOn(b) && r == b->rowIdx && c == row->col) return;
   if (!b->ptrHold) { b->ptrHold = 1; b->holdRow = spotOn(b) ? -1 : b->rowIdx; } /* pointed at: highlighted where it is, nothing slides or scrolls under the hand */
-  topNav.active = 0; if (spotOn(b)) spot_leave(b); b->rowIdx = r; row->col = c; if (row->popCol != c) { row->popCol = c; focus_pop(&row->pop); } hero_soon(b, 150); row_more(b, r); }
+  topNav.active = 0; b->heroAction = 0; if (spotOn(b)) spot_leave(b); b->rowIdx = r; row->col = c; if (row->popCol != c) { row->popCol = c; focus_pop(&row->pop); } hero_soon(b, 150); row_more(b, r); }
 static void board_tick(float dt) {
   disc_wait_tick();
   for (int k = 0; k < 2; k++) { Board *bb = &boards[k]; double now = app_now(); for (int i = 0; i < bb->n; i++) { Row *r = &bb->rows[i]; if (r->retryAt > 0 && now >= r->retryAt && r->hasDef) { r->retryAt = 0; sb_catalog(&r->def, on_catalog, tok(bb, i)); } } } /* (rows that had no answer: asked again) */
@@ -957,10 +1015,10 @@ static void row_draw(Board *b, Row *r, int ri, float y, int near, float rowA) {
 static void board_draw(void) {
   Board *b = cur(); if (!b) return;
   hero_draw(b);
-  int disc = b->kind == 1; float sy = disc ? b->spotY.v : 0, ra0 = disc ? b->rowsA.v : 1, clipTop = disc ? ROWS_TOP + sy + FILT_H - 8 : ROWS_TOP; /* (Discover: the grid scrolls under its strip, which stays put) */
+  int disc = b->kind == 1; float sy = disc ? b->spotY.v : 0, ra0 = disc ? b->rowsA.v : 1, clipTop = disc ? ROWS_TOP + sy + FILT_H - 8 : HOME_ROWS_TOP; /* (Discover: the grid scrolls under its strip, which stays put) */
   gfx_clip_push(0, clipTop, SB_W, SB_H - clipTop);
   gfx_offset_push(0, b->hostY.v + sy);
-  float y = ROWS_TOP;
+  float y = disc ? ROWS_TOP : HOME_ROWS_TOP;
   int vis = 0, filtI = -1; float filtY = 0;
   for (int i = 0; i < b->n; i++) { Row *r = &b->rows[i]; if (r->hidden) continue; float h = row_h(r);
     if (disc && r->filt) { filtI = i; filtY = y; y += h; continue; } /* (drawn after, where it stays) */
@@ -987,9 +1045,9 @@ static int first_cards(Board *b, int nrows) {
   return seen && got >= want;
 }
 int board_home_ready(void) {
-  Board *b = &boards[0]; if (!first_cards(b, 2)) return 0;
-  if (!b->heroSet || !b->heroShown) return 0;
-  return bg_current()[0] && img_loaded(bg_current());
+  /* Show the interactive catalog as soon as it has a selectable item.
+     Artwork and translated metadata can finish after the splash. */
+  return focused_of(&boards[0]) != NULL;
 }
 /* a tab not on screen made ready in the background: its rows (and Discover's spotlight) asked for, then what its
    first screen shows: the first title's details, translation, logo and backdrop, the first cards. 1 when all is in */
@@ -1038,7 +1096,7 @@ int board_saver_items(Item *out, int max) {
 /* where the focused card is (a title page grows out of it) */
 static int board_origin(float *x, float *y) {
   Board *b = cur(); if (!b || spotOn(b) || b->rowIdx >= b->n || topNav.active) return 0; Row *r = &b->rows[b->rowIdx]; if (r->col >= r->items.n) return 0;
-  float cy = ROWS_TOP + b->hostY.v; for (int i = 0; i < b->rowIdx; i++) if (!b->rows[i].hidden) cy += row_h(&b->rows[i]);
+  float cy = (b->kind ? ROWS_TOP : HOME_ROWS_TOP) + b->hostY.v; for (int i = 0; i < b->rowIdx; i++) if (!b->rows[i].hidden) cy += row_h(&b->rows[i]);
   float cw = card_w(r), ch = card_h(r), cx = row_x0(r) + r->col * step_of(r) - r->off.v; if (app_rtl()) cx = SB_W - cx - cw;
   *x = cx + cw / 2; *y = cy + 18 + (r->grid ? 0 : text_line_height(31) + 26) + ch / 2; if (b->kind == 1) *y += b->spotY.v; return 1;
 }
